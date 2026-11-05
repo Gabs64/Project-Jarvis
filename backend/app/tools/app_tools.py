@@ -19,9 +19,14 @@ APP_MAP = {
     "code": "code.cmd",
     "vs code": "code.cmd",
     "visual studio code": "code.cmd",
+    "antigravity": "Google.AntigravityIDE",
+    "antigravity ide": "Google.AntigravityIDE",
     "notepad": "notepad.exe",
     "calculator": "calc.exe",
     "calc": "calc.exe",
+    "camera": "microsoft.windows.camera:",
+    "clock": "ms-clock:",
+    "calendar": "outlookcal:",
     "terminal": "wt.exe",
     "windows terminal": "wt.exe",
     "powershell": "powershell.exe",
@@ -29,8 +34,46 @@ APP_MAP = {
     "explorer": "explorer.exe",
     "file explorer": "explorer.exe",
     "settings": "ms-settings:",
-    "task manager": "taskmgr.exe"
+    "task manager": "taskmgr.exe",
+    "taskmgr": "taskmgr.exe",
+    "canva": "com.canva.CanvaDesktop",
+    "capcut": "capcut.exe",
+    "steam": "steam://open/main",
+    "word": "winword.exe",
+    "excel": "excel.exe",
+    "powerpoint": "powerpnt.exe"
 }
+
+_START_APPS_CACHE: dict[str, str] = {}
+_LAST_CACHE_TIME: float = 0
+
+def get_installed_start_apps() -> dict[str, str]:
+    """Retrieves installed Windows Start Apps and maps lowercase name to AppID."""
+    global _START_APPS_CACHE, _LAST_CACHE_TIME
+    import time
+    import json
+    if _START_APPS_CACHE and (time.time() - _LAST_CACHE_TIME < 300):
+        return _START_APPS_CACHE
+    try:
+        p = subprocess.run(
+            ['powershell.exe', '-NoProfile', '-WindowStyle', 'Hidden', '-Command', 'Get-StartApps | ConvertTo-Json'],
+            capture_output=True,
+            text=True,
+            creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+        )
+        if p.stdout.strip():
+            data = json.loads(p.stdout)
+            if isinstance(data, list):
+                _START_APPS_CACHE = {
+                    item['Name'].lower().strip(): item['AppID']
+                    for item in data if 'Name' in item and 'AppID' in item
+                }
+            elif isinstance(data, dict) and 'Name' in data and 'AppID' in data:
+                _START_APPS_CACHE = {data['Name'].lower().strip(): data['AppID']}
+            _LAST_CACHE_TIME = time.time()
+    except Exception:
+        pass
+    return _START_APPS_CACHE
 
 def clean_app_name(application: str) -> str:
     """Strips common conversational prefixes and suffixes from application names."""
@@ -48,6 +91,26 @@ def open_application(application: str) -> dict:
     
     try:
         if os.name == "nt":
+            # 1. Check dynamic Windows Start Apps (UWP, Desktop, Store apps)
+            start_apps = get_installed_start_apps()
+            matched_appid = None
+            if app_query in start_apps:
+                matched_appid = start_apps[app_query]
+            else:
+                for s_name, s_id in start_apps.items():
+                    if app_query == s_name or app_query in s_name or s_name in app_query:
+                        matched_appid = s_id
+                        break
+
+            if matched_appid:
+                try:
+                    subprocess.Popen(
+                        ['powershell.exe', '-NoProfile', '-WindowStyle', 'Hidden', '-Command', f'Start-Process "shell:AppsFolder\\{matched_appid}"'],
+                        creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+                    )
+                    return {"success": True, "message": f"Opened {application}."}
+                except Exception:
+                    pass
             # Special resilient case for Spotify (Windows Store AppX, Standalone, or URI Protocol)
             if "spotify" in app_query:
                 local_appdata = os.environ.get("LOCALAPPDATA", "")

@@ -457,12 +457,17 @@ class JarvisBrain:
             "switch", "turn on", "turn off", "briefing", "weather", "alarm", "remember"
         ])
 
+        # Ensure the prompt is in the conversation history as the latest user message
+        messages = [
+            {"role": "system", "content": JARVIS_SYSTEM_PROMPT},
+            *self.conversation_history[-6:]
+        ]
+        if not messages or messages[-1].get("role") != "user":
+            messages.append({"role": "user", "content": prompt})
+
         payload: dict[str, Any] = {
             "model": settings.AI_MODEL,
-            "messages": [
-                {"role": "system", "content": JARVIS_SYSTEM_PROMPT},
-                *self.conversation_history[-6:]
-            ],
+            "messages": messages,
             "temperature": 0.4,
             "max_tokens": 220
         }
