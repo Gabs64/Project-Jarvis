@@ -176,7 +176,7 @@ export function useVoiceEngine({
 
   // Voice Provider state
   const [voiceProvider, setVoiceProviderState] = useState<VoiceProvider>(() => {
-    return (localStorage.getItem('jarvis_voice_provider') as VoiceProvider) || (import.meta.env.VITE_VOICE_PROVIDER as VoiceProvider) || 'browser';
+    return (localStorage.getItem('jarvis_voice_provider') as VoiceProvider) || (import.meta.env.VITE_VOICE_PROVIDER as VoiceProvider) || 'local_neural';
   });
   const [localNeuralVoice, setLocalNeuralVoice] = useState<string>(() => {
     return localStorage.getItem('jarvis_local_neural_voice') || import.meta.env.VITE_LOCAL_NEURAL_VOICE || 'en-GB-RyanNeural';
@@ -753,16 +753,13 @@ export function useVoiceEngine({
     stopSpeaking();
     unlockAudioHardware();
 
-    // 1. Try Local Neural TTS (Option 2 - Studio British JARVIS voice, with fast 900ms fallback to instant Browser TTS)
+    // 1. Try Local Neural TTS (Option 2 - Studio British JARVIS voice - en-GB-RyanNeural)
     if (voiceProvider === 'local_neural') {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 900);
       try {
         updateState('THINKING');
         const res = await fetch('/api/voice/local-tts', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          signal: controller.signal,
           body: JSON.stringify({
             text: textToSpeak,
             voice: localNeuralVoice,
@@ -770,7 +767,6 @@ export function useVoiceEngine({
             pitch: '-4Hz'
           })
         });
-        clearTimeout(timeoutId);
 
         if (!res.ok) {
           throw new Error(`Local TTS HTTP ${res.status}`);
