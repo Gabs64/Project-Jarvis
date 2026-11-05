@@ -522,17 +522,28 @@ class JarvisBrain:
                 content = choice.get("content", "")
                 
                 # 2. Check if model returned tool invocation JSON in plain text
-                json_match = re.search(r'```(?:json)?\s*(\{\s*"name":\s*"[^"]+",\s*"arguments":\s*\{.*?\}\s*\})\s*```', content, re.DOTALL)
+                json_match = re.search(r'```(?:json)?\s*(\{\s*"(?:name|tool)":\s*"[^"]+",\s*"arguments":\s*\{.*?\}\s*\})\s*```', content, re.DOTALL)
                 if not json_match:
-                    json_match = re.search(r'(\{\s*"name":\s*"[^"]+",\s*"arguments":\s*\{.*?\}\s*\})', content, re.DOTALL)
+                    json_match = re.search(r'(\{\s*"(?:name|tool)":\s*"[^"]+",\s*"arguments":\s*\{.*?\}\s*\})', content, re.DOTALL)
                 if json_match:
                     try:
                         parsed = json.loads(json_match.group(1))
-                        if "name" in parsed and "arguments" in parsed:
+                        tool_name = parsed.get("name") or parsed.get("tool")
+                        tool_args = parsed.get("arguments", {})
+                        
+                        # Handle shell-style hallucinations by translating to open_application
+                        if tool_name in ["run_command", "bash", "shell", "exec"]:
+                            cmd = tool_args.get("command", "") or tool_args.get("cmd", "")
+                            app_match = re.search(r'(?:open|start|launch)\s+(?:-a\s+)?["\']?([^"\'\n]+)["\']?', cmd, re.I)
+                            if app_match:
+                                tool_name = "open_application"
+                                tool_args = {"application": app_match.group(1).strip()}
+                        
+                        if tool_name:
                             return {
                                 "tool_call": {
-                                    "name": parsed["name"],
-                                    "arguments": parsed.get("arguments", {})
+                                    "name": tool_name,
+                                    "arguments": tool_args
                                 }
                             }
                     except Exception:

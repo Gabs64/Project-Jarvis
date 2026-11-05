@@ -104,51 +104,22 @@ def open_application(application: str) -> dict:
 
             if matched_appid:
                 try:
-                    subprocess.Popen(
-                        ['powershell.exe', '-NoProfile', '-WindowStyle', 'Hidden', '-Command', f'Start-Process "shell:AppsFolder\\{matched_appid}"'],
-                        creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0)
-                    )
+                    os.system(f'start shell:AppsFolder\\"{matched_appid}"')
                     return {"success": True, "message": f"Opened {application}."}
                 except Exception:
                     pass
+
             # Special resilient case for Spotify (Windows Store AppX, Standalone, or URI Protocol)
             if "spotify" in app_query:
-                local_appdata = os.environ.get("LOCALAPPDATA", "")
-                appdata = os.environ.get("APPDATA", "")
-                
-                # 1. Direct AppX Shell Execution (Microsoft Store App)
                 try:
-                    subprocess.Popen(['explorer.exe', r'shell:AppsFolder\SpotifyAB.SpotifyMusic_zpdnekdrzrea0!Spotify'])
+                    os.system('start shell:AppsFolder\\SpotifyAB.SpotifyMusic_zpdnekdrzrea0!Spotify')
                     return {"success": True, "message": "Opened Spotify."}
                 except Exception:
                     pass
 
-                # 2. Check known executable paths (Store execution alias, AppData, Programs)
-                paths = [
-                    os.path.join(local_appdata, r"Microsoft\WindowsApps\Spotify.exe"),
-                    os.path.join(appdata, r"Spotify\Spotify.exe"),
-                    os.path.join(local_appdata, r"Programs\Spotify\Spotify.exe"),
-                ]
-                
-                for p in paths:
-                    if os.path.exists(p):
-                        try:
-                            subprocess.Popen([p])
-                            return {"success": True, "message": "Opened Spotify."}
-                        except Exception:
-                            try:
-                                os.startfile(p)
-                                return {"success": True, "message": "Opened Spotify."}
-                            except Exception:
-                                pass
-
-                # 3. PowerShell Start-Process (Silent, native Windows dispatch without warning sound)
                 try:
-                    subprocess.Popen(
-                        ['powershell.exe', '-NoProfile', '-WindowStyle', 'Hidden', '-Command', 'Start-Process', 'spotify:'],
-                        creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0)
-                    )
-                    return {"success": True, "message": "Dispatched launch command for Spotify."}
+                    os.system('start spotify:')
+                    return {"success": True, "message": "Opened Spotify."}
                 except Exception:
                     pass
 
