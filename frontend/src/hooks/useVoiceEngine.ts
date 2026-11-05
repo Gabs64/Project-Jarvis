@@ -149,6 +149,7 @@ const isDirectCommand = (raw: string): boolean => {
     /^(?:remind\s+me|set\s+(?:a\s+)?reminder)\b/i,
     /^(?:stop|quiet|cancel|silence)\b/i,
     /^(?:status|scan|diagnostics|diagnostic|help|clear|time|date|briefing|morning\s+briefing)\b/i,
+    /^(?:who|what|when|where|why|how|can\s+you|could\s+you|would\s+you|tell\s+me|explain|define|show\s+me|give\s+me|do\s+you|are\s+you|is\s+it|is\s+there|hello|hi|hey|good\s+(?:morning|afternoon|evening|night)|thank|thanks)\b/i,
     /^spotify\b/i
   ];
   return directPatterns.some(pattern => pattern.test(lower));
@@ -196,6 +197,10 @@ export function useVoiceEngine({
   const lastWakeWordTimeRef = useRef<number>(0);
   const lastSpeechEndTimeRef = useRef<number>(0);
   const listeningTimeoutRef = useRef<any>(null);
+  const silenceCommitTimerRef = useRef<any>(null);
+  const wakeOnlyTimerRef = useRef<any>(null);
+  const lastCommittedTextRef = useRef<string>('');
+  const lastCommittedTimeRef = useRef<number>(0);
   const restartTimerRef = useRef<any>(null);
   const lastRestartTimeRef = useRef<number>(0);
   const visualizerIntervalRef = useRef<any>(null);
@@ -475,10 +480,63 @@ export function useVoiceEngine({
         }
       }
 
-      // 2. Discard speaker echo arriving within 600ms of natural speech ending
-      if (lastSpeechEndTimeRef.current > 0 && now - lastSpeechEndTimeRef.current < 600) {
+      // 2. Discard speaker echo arriving within 450ms of natural speech ending
+      if (lastSpeechEndTimeRef.current > 0 && now - lastSpeechEndTimeRef.current < 450) {
         return;
       }
+
+      // Clear pending timers while user is actively speaking
+      if (silenceCommitTimerRef.current) {
+        clearTimeout(silenceCommitTimerRef.current);
+        silenceCommitTimerRef.current = null;
+      }
+      if (wakeOnlyTimerRef.current) {
+        clearTimeout(wakeOnlyTimerRef.current);
+        wakeOnlyTimerRef.current = null;
+      }
+
+      // Deduplicate if fast silence-commit already dispatched this utterance
+      const normalizedActive = heardLower.replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, ' ').trim();
+      if (
+        lastCommittedTextRef.current &&
+        now - lastCommittedTimeRef.current < 2800 &&
+        (normalizedActive === lastCommittedTextRef.current ||
+          lastCommittedTextRef.current.includes(normalizedActive))
+      ) {
+        return;
+      }
+
+      const dispatchCommand = (cmdToRun: string) => {
+        const cleanCmd = cmdToRun.trim();
+        if (!cleanCmd) return;
+        const norm = cleanCmd.toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, ' ').trim();
+        if (
+          lastCommittedTextRef.current &&
+          Date.now() - lastCommittedTimeRef.current < 2500 &&
+          norm === lastCommittedTextRef.current
+        ) {
+          return;
+        }
+        lastCommittedTextRef.current = norm;
+        lastCommittedTimeRef.current = Date.now();
+        lastWakeWordTimeRef.current = Date.now();
+        if (silenceCommitTimerRef.current) {
+          clearTimeout(silenceCommitTimerRef.current);
+          silenceCommitTimerRef.current = null;
+        }
+        if (wakeOnlyTimerRef.current) {
+          clearTimeout(wakeOnlyTimerRef.current);
+          wakeOnlyTimerRef.current = null;
+        }
+        playAudioChime('acknowledge');
+        setInterimTranscript('');
+        updateState('THINKING');
+        // Flush recognition buffer so next utterance starts clean
+        try {
+          recognition.stop();
+        } catch {}
+        onSpeechRecognizedRef.current(cleanCmd);
+      };
 
       setInterimTranscript(activeText);
 
@@ -489,72 +547,80 @@ export function useVoiceEngine({
         // Case A: User said wake word + command together: "Jarvis, open spotify"
         if (command && command.length > 1) {
           if (finalTranscript.trim()) {
-            if (now - lastWakeWordTimeRef.current > 800) {
-              lastWakeWordTimeRef.current = now;
-              playAudioChime('acknowledge');
-              setInterimTranscript('');
-              updateState('THINKING');
-              onSpeechRecognizedRef.current(command);
-              return;
-            }
-          }
-        } else {
-          // Case B: User said wake word ONLY: "Jarvis"
-          if (now - lastWakeWordTimeRef.current > 1500) {
-            lastWakeWordTimeRef.current = now;
-            playAudioChime('wake');
-            setInterimTranscript('Jarvis (Listening...)');
-            onWakeWordRef.current?.();
-            speak("Yes, sir? How may I assist you?", undefined, true);
-            updateState('LISTENING');
-            scheduleListeningTimeout(15);
+            dispatchCommand(command);
+            return;
+          } else {
+            // Fast silence commit (550ms) so user doesn't wait 2s for Chrome's isFinal
+            silenceCommitTimerRef.current = setTimeout(() => {
+              dispatchCommand(command);
+            }, 550);
             return;
           }
+        } else {
+          // Case B: User said wake word ONLY: "Jarvis" — wait 420ms in case user continues speaking a command
+          wakeOnlyTimerRef.current = setTimeout(() => {
+            const tNow = Date.now();
+            if (tNow - lastWakeWordTimeRef.current > 1200) {
+              lastWakeWordTimeRef.current = tNow;
+              lastCommittedTextRef.current = normalizedActive;
+              lastCommittedTimeRef.current = tNow;
+              playAudioChime('wake');
+              setInterimTranscript('Jarvis (Listening...)');
+              onWakeWordRef.current?.();
+              speak("Yes, sir? How may I assist you?", undefined, true);
+              updateState('LISTENING');
+              scheduleListeningTimeout(15);
+            }
+          }, 420);
+          return;
         }
-        return;
       }
 
       // 4. Follow-up command if Jarvis is actively waiting in LISTENING state
       if (assistantStateRef.current === 'LISTENING') {
-        if (finalTranscript.trim()) {
-          const finalText = finalTranscript.trim();
-          const extracted = wakeWordEnabledRef.current ? extractCommand(finalText, wakeWordRef.current) : finalText;
-          const commandToRun = extracted || finalText;
+        const extracted = wakeWordEnabledRef.current ? extractCommand(activeText, wakeWordRef.current) : activeText;
+        const commandToRun = (extracted || activeText).trim();
 
-          if (commandToRun && !containsWakeWord(commandToRun, wakeWordRef.current)) {
-            playAudioChime('acknowledge');
-            setInterimTranscript('');
-            updateState('THINKING');
-            onSpeechRecognizedRef.current(commandToRun);
+        if (commandToRun && !containsWakeWord(commandToRun, wakeWordRef.current)) {
+          if (finalTranscript.trim()) {
+            dispatchCommand(commandToRun);
+            return;
+          } else if (commandToRun.length > 1) {
+            silenceCommitTimerRef.current = setTimeout(() => {
+              dispatchCommand(commandToRun);
+            }, 550);
             return;
           }
         }
         return;
       }
 
-      // 5. Direct actionable command (e.g. "open spotify", "launch chrome", "volume up", "what time is it")
-      // Direct high-confidence commands work seamlessly even if wake word prefix was omitted
+      // 5. Direct actionable command or question (works seamlessly even without wake word prefix)
       if (isDirectCommand(activeText)) {
+        const extracted = extractCommand(activeText, wakeWordRef.current) || activeText;
         if (finalTranscript.trim()) {
-          const finalText = finalTranscript.trim();
-          const extracted = extractCommand(finalText, wakeWordRef.current) || finalText;
-          playAudioChime('acknowledge');
-          setInterimTranscript('');
-          updateState('THINKING');
-          onSpeechRecognizedRef.current(extracted);
+          dispatchCommand(extracted);
+          return;
+        } else if (extracted.length > 2) {
+          silenceCommitTimerRef.current = setTimeout(() => {
+            dispatchCommand(extracted);
+          }, 550);
           return;
         }
         return;
       }
 
-      // 6. If wake-word is disabled in settings, execute any final phrase
-      if (!wakeWordEnabledRef.current && finalTranscript.trim()) {
-        const finalText = finalTranscript.trim();
-        playAudioChime('acknowledge');
-        setInterimTranscript('');
-        updateState('THINKING');
-        onSpeechRecognizedRef.current(finalText);
-        return;
+      // 6. If wake-word is disabled in settings, execute any phrase
+      if (!wakeWordEnabledRef.current) {
+        if (finalTranscript.trim()) {
+          dispatchCommand(finalTranscript.trim());
+          return;
+        } else if (activeText.length > 2) {
+          silenceCommitTimerRef.current = setTimeout(() => {
+            dispatchCommand(activeText);
+          }, 550);
+          return;
+        }
       }
     };
 
@@ -621,7 +687,8 @@ export function useVoiceEngine({
       return;
     }
 
-    if (window.speechSynthesis.speaking || window.speechSynthesis.pending) {
+    const wasBusy = window.speechSynthesis.speaking || window.speechSynthesis.pending;
+    if (wasBusy) {
       window.speechSynthesis.cancel();
     }
     window.speechSynthesis.resume();
@@ -665,11 +732,14 @@ export function useVoiceEngine({
       updateState(keepListeningAfter ? 'LISTENING' : 'IDLE');
     };
 
-    // 40ms timeout ensures Chrome async cancel queue does not swallow the new utterance
-    setTimeout(() => {
-      window.speechSynthesis.resume();
+    if (wasBusy) {
+      setTimeout(() => {
+        window.speechSynthesis.resume();
+        window.speechSynthesis.speak(utterance);
+      }, 30);
+    } else {
       window.speechSynthesis.speak(utterance);
-    }, 40);
+    }
   };
 
   // Unified Speech method: Option 2 (Local Neural) -> Option 3 (Fish Audio) -> Option 1 (Browser Fallback)
@@ -683,13 +753,16 @@ export function useVoiceEngine({
     stopSpeaking();
     unlockAudioHardware();
 
-    // 1. Try Local Neural TTS (Option 2 - Studio British JARVIS voice, 100% free, no API key needed)
+    // 1. Try Local Neural TTS (Option 2 - Studio British JARVIS voice, with fast 900ms fallback to instant Browser TTS)
     if (voiceProvider === 'local_neural') {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 900);
       try {
         updateState('THINKING');
         const res = await fetch('/api/voice/local-tts', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
+          signal: controller.signal,
           body: JSON.stringify({
             text: textToSpeak,
             voice: localNeuralVoice,
@@ -697,6 +770,7 @@ export function useVoiceEngine({
             pitch: '-4Hz'
           })
         });
+        clearTimeout(timeoutId);
 
         if (!res.ok) {
           throw new Error(`Local TTS HTTP ${res.status}`);

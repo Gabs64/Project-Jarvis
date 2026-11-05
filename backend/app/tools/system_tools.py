@@ -6,9 +6,12 @@ import psutil
 from PIL import ImageGrab
 from app.config import settings
 
+# Prime psutil CPU counter so non-blocking calls return accurate deltas immediately
+psutil.cpu_percent(interval=None)
+
 def get_system_status() -> dict:
     """Returns comprehensive system metrics: CPU, Memory, Disk, Battery, Network."""
-    cpu_percent = psutil.cpu_percent(interval=0.1)
+    cpu_percent = psutil.cpu_percent(interval=None)
     cpu_count = psutil.cpu_count(logical=True)
     
     mem = psutil.virtual_memory()

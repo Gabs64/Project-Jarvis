@@ -38,7 +38,7 @@ async def websocket_endpoint(websocket: WebSocket):
                     "event": "system.telemetry",
                     "data": metrics
                 }))
-                await asyncio.sleep(2.5)
+                await asyncio.sleep(1.0)
             except Exception:
                 break
                 
@@ -57,7 +57,13 @@ async def websocket_endpoint(websocket: WebSocket):
             event_type = payload.get("event")
             data = payload.get("data", {})
 
-            if event_type == "voice.start":
+            if event_type == "ping":
+                await websocket.send_text(json.dumps({
+                    "event": "pong",
+                    "data": {"ts": data.get("ts")}
+                }))
+
+            elif event_type == "voice.start":
                 # Microphone active
                 await websocket.send_text(json.dumps({
                     "event": "assistant.state",

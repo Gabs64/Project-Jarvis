@@ -10,6 +10,15 @@ from app.tools.registry import tool_registry
 class JarvisBrain:
     def __init__(self):
         self.conversation_history: List[Dict[str, Any]] = []
+        self._http_client: Optional[httpx.AsyncClient] = None
+
+    def _get_http_client(self, timeout_secs: float) -> httpx.AsyncClient:
+        if self._http_client is None or self._http_client.is_closed:
+            self._http_client = httpx.AsyncClient(
+                timeout=timeout_secs,
+                limits=httpx.Limits(max_keepalive_connections=10, max_connections=20)
+            )
+        return self._http_client
 
     def clear_history(self):
         self.conversation_history = []
@@ -452,13 +461,14 @@ class JarvisBrain:
             "model": settings.AI_MODEL,
             "messages": [
                 {"role": "system", "content": JARVIS_SYSTEM_PROMPT},
-                *self.conversation_history[-8:]
+                *self.conversation_history[-6:]
             ],
-            "temperature": 0.4
+            "temperature": 0.4,
+            "max_tokens": 220
         }
 
-        # Include tool schemas when requesting actions or when using high-speed cloud providers
-        if is_action_request or settings.LLM_PROVIDER != "ollama":
+        # Include tool schemas only when the prompt looks like an action/tool request
+        if is_action_request:
             payload["tools"] = tool_registry.get_all_schemas()
         
         # Determine API base URL
@@ -473,61 +483,61 @@ class JarvisBrain:
         else:
             api_base = "https://api.openai.com/v1"
 
-        timeout_secs = 60.0 if settings.LLM_PROVIDER == "ollama" else 25.0
+        timeout_secs = 60.0 if settings.LLM_PROVIDER == "ollama" else 20.0
+        client = self._get_http_client(timeout_secs)
 
-        async with httpx.AsyncClient(timeout=timeout_secs) as client:
-            try:
-                resp = await client.post(f"{api_base}/chat/completions", headers=headers, json=payload)
+        try:
+            resp = await client.post(f"{api_base}/chat/completions", headers=headers, json=payload)
+            
+            # If model doesn't support tools schema (e.g. older llama3 in Ollama), retry without tools payload
+            if resp.status_code == 400 and ("support tools" in resp.text.lower() or "tools" in resp.text.lower()):
+                payload_no_tools = {k: v for k, v in payload.items() if k != "tools"}
+                resp = await client.post(f"{api_base}/chat/completions", headers=headers, json=payload_no_tools)
+
+            if resp.status_code == 200:
+                data = resp.json()
+                choice = data["choices"][0]["message"]
                 
-                # If model doesn't support tools schema (e.g. older llama3 in Ollama), retry without tools payload
-                if resp.status_code == 400 and ("support tools" in resp.text.lower() or "tools" in resp.text.lower()):
-                    payload_no_tools = {k: v for k, v in payload.items() if k != "tools"}
-                    resp = await client.post(f"{api_base}/chat/completions", headers=headers, json=payload_no_tools)
-
-                if resp.status_code == 200:
-                    data = resp.json()
-                    choice = data["choices"][0]["message"]
-                    
-                    # 1. Native OpenAI-style tool calls
-                    if "tool_calls" in choice and choice["tool_calls"]:
-                        tc = choice["tool_calls"][0]["function"]
-                        args = tc.get("arguments", {})
-                        if isinstance(args, str):
-                            try:
-                                args = json.loads(args)
-                            except Exception:
-                                args = {}
-                        return {
-                            "tool_call": {
-                                "name": tc["name"],
-                                "arguments": args
-                            }
-                        }
-                    
-                    content = choice.get("content", "")
-                    
-                    # 2. Check if model returned tool invocation JSON in plain text
-                    json_match = re.search(r'```(?:json)?\s*(\{\s*"name":\s*"[^"]+",\s*"arguments":\s*\{.*?\}\s*\})\s*```', content, re.DOTALL)
-                    if not json_match:
-                        json_match = re.search(r'(\{\s*"name":\s*"[^"]+",\s*"arguments":\s*\{.*?\}\s*\})', content, re.DOTALL)
-                    if json_match:
+                # 1. Native OpenAI-style tool calls
+                if "tool_calls" in choice and choice["tool_calls"]:
+                    tc = choice["tool_calls"][0]["function"]
+                    args = tc.get("arguments", {})
+                    if isinstance(args, str):
                         try:
-                            parsed = json.loads(json_match.group(1))
-                            if "name" in parsed and "arguments" in parsed:
-                                return {
-                                    "tool_call": {
-                                        "name": parsed["name"],
-                                        "arguments": parsed.get("arguments", {})
-                                    }
-                                }
+                            args = json.loads(args)
                         except Exception:
-                            pass
+                            args = {}
+                    return {
+                        "tool_call": {
+                            "name": tc["name"],
+                            "arguments": args
+                        }
+                    }
+                
+                content = choice.get("content", "")
+                
+                # 2. Check if model returned tool invocation JSON in plain text
+                json_match = re.search(r'```(?:json)?\s*(\{\s*"name":\s*"[^"]+",\s*"arguments":\s*\{.*?\}\s*\})\s*```', content, re.DOTALL)
+                if not json_match:
+                    json_match = re.search(r'(\{\s*"name":\s*"[^"]+",\s*"arguments":\s*\{.*?\}\s*\})', content, re.DOTALL)
+                if json_match:
+                    try:
+                        parsed = json.loads(json_match.group(1))
+                        if "name" in parsed and "arguments" in parsed:
+                            return {
+                                "tool_call": {
+                                    "name": parsed["name"],
+                                    "arguments": parsed.get("arguments", {})
+                                }
+                            }
+                    except Exception:
+                        pass
 
-                    return {"reply": content}
-                else:
-                    print(f"[JARVIS BRAIN] LLM returned status {resp.status_code}: {resp.text[:250]}")
-            except Exception as e:
-                print(f"[JARVIS BRAIN] LLM request error: {e}")
+                return {"reply": content}
+            else:
+                print(f"[JARVIS BRAIN] LLM returned status {resp.status_code}: {resp.text[:250]}")
+        except Exception as e:
+            print(f"[JARVIS BRAIN] LLM request error: {e}")
         return None
 
 jarvis_brain = JarvisBrain()

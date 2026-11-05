@@ -5,6 +5,7 @@ import edge_tts
 
 class LocalNeuralVoiceService:
     DEFAULT_VOICE = "en-GB-RyanNeural"  # Iconic JARVIS British accent
+    _AUDIO_CACHE: dict[tuple[str, str, str, str], bytes] = {}
 
     @classmethod
     async def synthesize(
@@ -19,6 +20,10 @@ class LocalNeuralVoiceService:
         No cloud API key required.
         """
         chosen_voice = voice or cls.DEFAULT_VOICE
+        cache_key = (text.strip(), chosen_voice, rate, pitch)
+        if cache_key in cls._AUDIO_CACHE:
+            return cls._AUDIO_CACHE[cache_key]
+
         communicate = edge_tts.Communicate(
             text=text,
             voice=chosen_voice,
@@ -31,7 +36,10 @@ class LocalNeuralVoiceService:
             if chunk["type"] == "audio":
                 audio_stream.write(chunk["data"])
                 
-        return audio_stream.getvalue()
+        audio_bytes = audio_stream.getvalue()
+        if audio_bytes and len(cls._AUDIO_CACHE) < 128:
+            cls._AUDIO_CACHE[cache_key] = audio_bytes
+        return audio_bytes
 
     @classmethod
     def get_available_voices(cls):
