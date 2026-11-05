@@ -172,16 +172,16 @@ export function useVoiceEngine({
 
   // Voice Provider state
   const [voiceProvider, setVoiceProviderState] = useState<VoiceProvider>(() => {
-    return (localStorage.getItem('jarvis_voice_provider') as VoiceProvider) || 'local_neural';
+    return (localStorage.getItem('jarvis_voice_provider') as VoiceProvider) || (import.meta.env.VITE_VOICE_PROVIDER as VoiceProvider) || 'local_neural';
   });
   const [localNeuralVoice, setLocalNeuralVoice] = useState<string>(() => {
-    return localStorage.getItem('jarvis_local_neural_voice') || 'en-GB-RyanNeural';
+    return localStorage.getItem('jarvis_local_neural_voice') || import.meta.env.VITE_LOCAL_NEURAL_VOICE || 'en-GB-RyanNeural';
   });
   const [fishApiKey, setFishApiKey] = useState<string>(() => {
-    return localStorage.getItem('jarvis_fish_api_key') || '';
+    return localStorage.getItem('jarvis_fish_api_key') || import.meta.env.VITE_FISH_AUDIO_API_KEY || '';
   });
   const [fishVoiceId, setFishVoiceId] = useState<string>(() => {
-    return localStorage.getItem('jarvis_fish_voice_id') || '9a9cf47702da476aa4629e2506d4a857';
+    return localStorage.getItem('jarvis_fish_voice_id') || import.meta.env.VITE_FISH_AUDIO_VOICE_ID || '9a9cf47702da476aa4629e2506d4a857';
   });
 
   const recognitionRef = useRef<any>(null);

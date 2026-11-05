@@ -36,10 +36,10 @@ export default function App() {
   const [telemetry, setTelemetry] = useState<any>(null);
   const [isWsConnected, setIsWsConnected] = useState(false);
   const [userName, setUserName] = useState<string>(() => {
-    return localStorage.getItem('jarvis_user_name') || 'sir';
+    return localStorage.getItem('jarvis_user_name') || import.meta.env.VITE_USER_NAME || 'sir';
   });
   const [messages, setMessages] = useState<ChatMessage[]>(() => {
-    const initialName = localStorage.getItem('jarvis_user_name') || 'sir';
+    const initialName = localStorage.getItem('jarvis_user_name') || import.meta.env.VITE_USER_NAME || 'sir';
     const welcome = getWelcomeGreeting(initialName);
     return [
       {
@@ -52,10 +52,12 @@ export default function App() {
   });
   
   // Settings state
-  const [wakeWord, setWakeWord] = useState('jarvis');
-  const [wakeWordEnabled, setWakeWordEnabled] = useState(true);
-  const [voicePitch, setVoicePitch] = useState(0.95);
-  const [voiceRate, setVoiceRate] = useState(1.05);
+  const [wakeWord, setWakeWord] = useState(import.meta.env.VITE_WAKE_WORD || 'jarvis');
+  const [wakeWordEnabled, setWakeWordEnabled] = useState(
+    import.meta.env.VITE_WAKE_WORD_ENABLED ? import.meta.env.VITE_WAKE_WORD_ENABLED !== 'false' : true
+  );
+  const [voicePitch, setVoicePitch] = useState(Number(import.meta.env.VITE_VOICE_PITCH) || 0.95);
+  const [voiceRate, setVoiceRate] = useState(Number(import.meta.env.VITE_VOICE_RATE) || 1.05);
 
   const handleUpdateUserName = (name: string) => {
     setUserName(name);
