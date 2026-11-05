@@ -377,13 +377,23 @@ export default function App() {
           try {
             const msg = JSON.parse(event.data);
             if (msg.event === 'system.telemetry' && msg.data) {
+              const d = msg.data;
+              const cpuVal = typeof d.cpu?.percent === 'number' ? d.cpu.percent : d.cpu_percent;
+              const memVal = typeof d.memory?.percent === 'number' ? d.memory.percent : d.ram_percent;
+              const memTotal = typeof d.memory?.total_gb === 'number' ? d.memory.total_gb : d.ram_total_gb;
+              const coresVal = d.cpu?.cores;
+
               liveTelemetryRef.current = {
-                cpu: msg.data.cpu_percent,
-                mem: msg.data.ram_percent,
-                ramTotalGb: msg.data.ram_total_gb,
+                cpu: typeof cpuVal === 'number' ? cpuVal : undefined,
+                mem: typeof memVal === 'number' ? memVal : undefined,
+                ramTotalGb: typeof memTotal === 'number' ? memTotal : undefined,
               };
-              if (msg.data.ram_total_gb) {
-                setDeviceMem(`${Math.round(msg.data.ram_total_gb)} GB`);
+
+              if (typeof memTotal === 'number') {
+                setDeviceMem(`${Math.round(memTotal)} GB`);
+              }
+              if (coresVal) {
+                setCores(String(coresVal));
               }
             }
           } catch {
@@ -459,7 +469,7 @@ export default function App() {
     };
 
     for (let i = 0; i < 60; i++) step();
-    const id = setInterval(step, 900);
+    const id = setInterval(step, 800);
     return () => clearInterval(id);
   }, []);
 

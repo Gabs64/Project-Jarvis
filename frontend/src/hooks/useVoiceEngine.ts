@@ -176,7 +176,7 @@ export function useVoiceEngine({
 
   // Voice Provider state
   const [voiceProvider, setVoiceProviderState] = useState<VoiceProvider>(() => {
-    return (localStorage.getItem('jarvis_voice_provider') as VoiceProvider) || (import.meta.env.VITE_VOICE_PROVIDER as VoiceProvider) || 'local_neural';
+    return (localStorage.getItem('jarvis_voice_provider') as VoiceProvider) || (import.meta.env.VITE_VOICE_PROVIDER as VoiceProvider) || 'browser';
   });
   const [localNeuralVoice, setLocalNeuralVoice] = useState<string>(() => {
     return localStorage.getItem('jarvis_local_neural_voice') || import.meta.env.VITE_LOCAL_NEURAL_VOICE || 'en-GB-RyanNeural';
