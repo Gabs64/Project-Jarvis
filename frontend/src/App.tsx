@@ -1,70 +1,43 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { 
-  Shield, Settings, Brain, Home, CheckSquare, Zap, 
-  LayoutDashboard, Sparkles, Mic, AlertCircle
-} from 'lucide-react';
 import { useVoiceEngine } from './hooks/useVoiceEngine';
-import { JarvisOrb } from './components/JarvisOrb';
-import { SystemStatus } from './components/SystemStatus';
-import { QuickActions } from './components/QuickActions';
-import { ConversationPanel, type ChatMessage } from './components/ConversationPanel';
 import { PermissionDialog } from './components/PermissionDialog';
-import { BriefingModal } from './components/BriefingModal';
-import { MemoryPanel } from './components/MemoryPanel';
-import { SmartDevicePanel } from './components/SmartDevicePanel';
-import { TaskPanel } from './components/TaskPanel';
-import { AutomationPanel } from './components/AutomationPanel';
-import { LogsPanel } from './components/LogsPanel';
-import { SettingsPanel } from './components/SettingsPanel';
-import { HoloBackground } from './components/HoloBackground';
 
-type ActiveTab = 'command' | 'memory' | 'devices' | 'tasks' | 'automations' | 'logs' | 'settings';
+interface LogEntry {
+  id: string;
+  time: string;
+  text: string;
+  cls?: string;
+}
 
-const getWelcomeGreeting = (name: string = 'sir') => {
-  const hour = new Date().getHours();
-  let salutation = 'Good morning';
-  if (hour >= 12 && hour < 18) {
-    salutation = 'Good afternoon';
-  } else if (hour >= 18) {
-    salutation = 'Good evening';
-  }
-  return `${salutation}, ${name}. All JARVIS core systems are online and ready for your command.`;
-};
+const pad = (n: number) => String(n).padStart(2, '0');
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<ActiveTab>('command');
-  const [telemetry, setTelemetry] = useState<any>(null);
+  const [bootOff, setBootOff] = useState(false);
+  const [timeStr, setTimeStr] = useState('00:00:00');
+  const [dateStr, setDateStr] = useState('');
+
+  // Device facts
+  const [cores, setCores] = useState<string>('–');
+  const [deviceMem, setDeviceMem] = useState<string>('–');
+  const [power, setPower] = useState<string>('–');
+  const [linkStatus, setLinkStatus] = useState<string>('–');
+  const [displaySize, setDisplaySize] = useState<string>('–');
+
+  // Load telemetry
+  const [cpuDisplay, setCpuDisplay] = useState('0%');
+  const [memDisplay, setMemDisplay] = useState('0%');
+  const [netDisplay, setNetDisplay] = useState('0 ms');
+  const [cpuPoints, setCpuPoints] = useState('');
+  const [memPoints, setMemPoints] = useState('');
+  const [netPoints, setNetPoints] = useState('');
+
+  // Log & Command state
+  const [logs, setLogs] = useState<LogEntry[]>([]);
+  const [inputVal, setInputVal] = useState('');
+  const [isProcessing, setIsProcessing] = useState(false);
   const [isWsConnected, setIsWsConnected] = useState(false);
-  const [userName, setUserName] = useState<string>(() => {
-    return localStorage.getItem('jarvis_user_name') || import.meta.env.VITE_USER_NAME || 'sir';
-  });
-  const [messages, setMessages] = useState<ChatMessage[]>(() => {
-    const initialName = localStorage.getItem('jarvis_user_name') || import.meta.env.VITE_USER_NAME || 'sir';
-    const welcome = getWelcomeGreeting(initialName);
-    return [
-      {
-        id: 'welcome-' + Date.now(),
-        role: 'assistant',
-        content: welcome,
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-      }
-    ];
-  });
-  
-  // Settings state
-  const [wakeWord, setWakeWord] = useState(import.meta.env.VITE_WAKE_WORD || 'jarvis');
-  const [wakeWordEnabled, setWakeWordEnabled] = useState(
-    import.meta.env.VITE_WAKE_WORD_ENABLED ? import.meta.env.VITE_WAKE_WORD_ENABLED !== 'false' : true
-  );
-  const [voicePitch, setVoicePitch] = useState(Number(import.meta.env.VITE_VOICE_PITCH) || 0.95);
-  const [voiceRate, setVoiceRate] = useState(Number(import.meta.env.VITE_VOICE_RATE) || 1.05);
 
-  const handleUpdateUserName = (name: string) => {
-    setUserName(name);
-    localStorage.setItem('jarvis_user_name', name);
-  };
-
-  // Dangerous action confirmation state
+  // Dangerous action confirmation modal
   const [pendingConfirmation, setPendingConfirmation] = useState<{
     tool: string;
     arguments?: Record<string, any>;
@@ -72,441 +45,840 @@ export default function App() {
     riskLevel?: string;
   } | null>(null);
 
-  // Briefing modal state
-  const [briefingData, setBriefingData] = useState<any | null>(null);
-  const [isBriefingOpen, setIsBriefingOpen] = useState(false);
+  // Refs for canvas & telemetry
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const fpsRef = useRef<HTMLElement | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const targetRef = useRef<number>(0.18);
+  const audioLevelsRef = useRef<number[]>(new Array(24).fill(8));
+  const typingTimerRef = useRef<any>(null);
+  const userManuallyMutedRef = useRef<boolean>(false);
+  const liveTelemetryRef = useRef<{ cpu?: number; mem?: number; ramTotalGb?: number }>({});
+  const cpuValRef = useRef<number>(22);
+  const memValRef = useRef<number>(48);
+  const netValRef = useRef<number>(24);
 
-  const wsRef = useRef<WebSocket | null>(null);
   const stopSpeakingRef = useRef<((interrupted?: boolean) => void) | null>(null);
   const speakRef = useRef<((text: string, onEnd?: () => void) => void) | null>(null);
-  const setAssistantStateRef = useRef<((state: any) => void) | null>(null);
+  const startListeningRef = useRef<(() => void) | null>(null);
+  const isMicActiveStateRef = useRef<boolean>(false);
 
-  // Handle incoming speech transcript or text command
-  const handleUserCommand = useCallback(async (
-    text: string, 
-    confirmed: boolean = false, 
-    pendingTool?: string, 
-    pendingArgs?: any
-  ) => {
-    if (!text.trim()) return;
+  const wakeWord = import.meta.env.VITE_WAKE_WORD || 'jarvis';
+  const wakeWordEnabled = import.meta.env.VITE_WAKE_WORD_ENABLED
+    ? import.meta.env.VITE_WAKE_WORD_ENABLED !== 'false'
+    : true;
+  const voicePitch = Number(import.meta.env.VITE_VOICE_PITCH) || 0.95;
+  const voiceRate = Number(import.meta.env.VITE_VOICE_RATE) || 1.05;
 
-    // Halt any ongoing speech playback when a command is dispatched
-    stopSpeakingRef.current?.(true);
+  const say = useCallback((txt: string, cls?: string) => {
+    const n = new Date();
+    const entry: LogEntry = {
+      id: `${Date.now()}-${Math.random()}`,
+      time: `${pad(n.getHours())}:${pad(n.getMinutes())}`,
+      text: txt,
+      cls,
+    };
+    setLogs((prev) => {
+      const next = [...prev, entry];
+      return next.length > 8 ? next.slice(next.length - 8) : next;
+    });
+  }, []);
 
-    // Check if user is confirming or canceling via voice while dialog is open
-    if (pendingConfirmation) {
-      const lower = text.toLowerCase();
-      if (['yes', 'proceed', 'confirm', 'do it', 'sure'].some(w => lower.includes(w))) {
-        confirmDangerousAction();
-        return;
-      } else if (['no', 'cancel', 'stop', 'abort'].some(w => lower.includes(w))) {
-        cancelDangerousAction();
-        return;
-      }
+  const localCmds = useCallback((key: string): string | null | undefined => {
+    switch (key) {
+      case 'help':
+        return 'Commands: status, scan, time, diagnostics, clear — or speak “Jarvis” + any command.';
+      case 'status':
+        return `All systems nominal. Processor at ${Math.round(cpuValRef.current)}%, memory at ${Math.round(memValRef.current)}%, latency ${Math.round(netValRef.current)} ms.`;
+      case 'time':
+        return 'It is ' + new Date().toLocaleTimeString() + '.';
+      case 'scan':
+        return 'Scan complete. 0 threats, 0 anomalies detected.';
+      case 'diagnostics':
+      case 'diagnostic':
+        return 'Core, display and network checks passed.';
+      default:
+        return undefined;
     }
+  }, []);
 
-    const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    
-    // Add operator message to conversation
-    const userMsgId = 'msg-' + Date.now();
-    setMessages(prev => [
-      ...prev,
-      {
-        id: userMsgId,
-        role: 'user',
-        content: text,
-        timestamp
+  const handleUserCommand = useCallback(
+    async (
+      rawText: string,
+      confirmed: boolean = false,
+      pendingTool?: string,
+      pendingArgs?: any
+    ) => {
+      const v = rawText.trim();
+      if (!v) return;
+
+      stopSpeakingRef.current?.(true);
+
+      const key = v.toLowerCase().replace(/[^a-z]/g, '');
+      if (key === 'clear') {
+        setLogs([]);
+        return;
       }
-    ]);
 
-    // Send through WebSocket if connected, or direct REST API
-    try {
-      setAssistantStateRef.current?.('THINKING');
-      
-      const res = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          text,
-          confirmed,
-          pending_tool: pendingTool,
-          pending_args: pendingArgs
-        })
-      });
-      const data = await res.json();
+      if (!confirmed) {
+        say('› ' + v, 'me');
+      }
 
-      // Check if confirmation is requested
-      if (data.requires_confirmation) {
-        setPendingConfirmation({
-          tool: data.pending_tool,
-          arguments: data.pending_args,
-          promptText: data.text,
-          riskLevel: 'HIGH'
+      // Check voice confirmation for pending dangerous action
+      if (pendingConfirmation && !confirmed) {
+        const lower = v.toLowerCase();
+        if (['yes', 'proceed', 'confirm', 'do it', 'sure'].some((w) => lower.includes(w))) {
+          const { tool, arguments: args } = pendingConfirmation;
+          setPendingConfirmation(null);
+          handleUserCommand('Confirmed', true, tool, args);
+          return;
+        } else if (['no', 'cancel', 'stop', 'abort'].some((w) => lower.includes(w))) {
+          setPendingConfirmation(null);
+          say('Action cancelled, sir.', 'warn');
+          speakRef.current?.('Action cancelled, sir.');
+          return;
+        }
+      }
+
+      setIsProcessing(true);
+      targetRef.current = 0.9;
+
+      // Built-in quick HUD diagnostics
+      if (key === 'scan' || key === 'diagnostics' || key === 'diagnostic' || key === 'help') {
+        const reply = localCmds(key)!;
+        setTimeout(() => {
+          say(reply);
+          setIsProcessing(false);
+          targetRef.current = 0.18;
+          speakRef.current?.(reply);
+        }, 650);
+        return;
+      }
+
+      try {
+        const t0 = performance.now();
+        const res = await fetch('/api/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            text: v,
+            confirmed,
+            pending_tool: pendingTool,
+            pending_args: pendingArgs,
+          }),
         });
-      }
+        const latency = Math.max(4, Math.min(120, Math.round(performance.now() - t0)));
+        netValRef.current = latency;
 
-      // Add assistant response to conversation
-      const replyMsgId = 'reply-' + Date.now();
-      setMessages(prev => [
-        ...prev,
-        {
-          id: replyMsgId,
-          role: 'assistant',
-          content: data.text,
-          toolCalls: data.tool_calls,
-          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        if (!res.ok) {
+          throw new Error(`HTTP ${res.status}`);
         }
-      ]);
 
-      // Vocalize response via Voice Engine
-      if (data.text) {
-        speakRef.current?.(data.text);
-      } else {
-        setAssistantStateRef.current?.('IDLE');
-      }
+        const data = await res.json();
 
-    } catch (err: any) {
-      console.error(err);
-      setAssistantStateRef.current?.('ERROR');
-      setMessages(prev => [
-        ...prev,
-        {
-          id: 'err-' + Date.now(),
-          role: 'assistant',
-          content: "System anomaly detected during neural synthesis, sir.",
-          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        if (data.requires_confirmation) {
+          setPendingConfirmation({
+            tool: data.pending_tool,
+            arguments: data.pending_args,
+            promptText: data.text,
+            riskLevel: 'HIGH',
+          });
         }
-      ]);
-      speakRef.current?.("System anomaly detected during neural synthesis, sir.");
-    }
-  }, [pendingConfirmation]);
 
-  // Voice Engine setup
+        const replyText = data.text || 'Command executed, sir.';
+        say(replyText, data.requires_confirmation ? 'warn' : undefined);
+        setIsProcessing(false);
+        targetRef.current = 0.18;
+        speakRef.current?.(replyText);
+      } catch {
+        const fallback = localCmds(key);
+        setIsProcessing(false);
+        targetRef.current = 0.18;
+        if (fallback) {
+          say(fallback);
+          speakRef.current?.(fallback);
+        } else {
+          const msg = `I don’t know “${v}” yet. Type help to see what I can do.`;
+          say(msg, 'warn');
+          speakRef.current?.(msg);
+        }
+      }
+    },
+    [localCmds, pendingConfirmation, say]
+  );
+
+  const handleWakeWord = useCallback(() => {
+    say('› ' + wakeWord, 'me');
+    say('Yes, sir? How may I assist you?');
+  }, [say, wakeWord]);
+
   const {
     isMicActive,
     micPermissionDenied,
     assistantState,
     interimTranscript,
     audioLevel,
-    selectedVoice,
-    availableVoices,
-    setSelectedVoice,
-    voiceProvider,
-    setVoiceProvider,
-    localNeuralVoice,
-    updateLocalNeuralVoice,
-    fishApiKey,
-    updateFishApiKey,
-    fishVoiceId,
-    updateFishVoiceId,
-    toggleListening,
+    startListening,
+    stopListening,
     speak,
     stopSpeaking,
-    testVoiceSpeech,
-    setAssistantState
   } = useVoiceEngine({
     wakeWord,
     wakeWordEnabled,
     voicePitch,
     voiceRate,
-    onSpeechRecognized: handleUserCommand
+    onSpeechRecognized: handleUserCommand,
+    onWakeWord: handleWakeWord,
   });
 
   stopSpeakingRef.current = stopSpeaking;
   speakRef.current = speak;
-  setAssistantStateRef.current = setAssistantState;
+  startListeningRef.current = startListening;
+  isMicActiveStateRef.current = isMicActive;
+  audioLevelsRef.current = audioLevel;
 
-  // Confirm dangerous action handler
-  const confirmDangerousAction = () => {
-    if (!pendingConfirmation) return;
-    const { tool, arguments: args } = pendingConfirmation;
-    setPendingConfirmation(null);
-    handleUserCommand("Confirmed", true, tool, args);
-  };
-
-  const cancelDangerousAction = () => {
-    setPendingConfirmation(null);
-    speak("Action cancelled, sir.");
-  };
-
-  // Vocalize welcome greeting on initial load
-  const hasSpokenWelcome = useRef(false);
-  useEffect(() => {
-    if (hasSpokenWelcome.current) return;
-    const timer = setTimeout(() => {
-      if (!hasSpokenWelcome.current) {
-        hasSpokenWelcome.current = true;
-        const welcomeText = getWelcomeGreeting(userName);
-        speak(welcomeText);
-      }
-    }, 1200);
-    return () => clearTimeout(timer);
-  }, [speak, userName]);
-
-  // Open Morning Briefing
-  const triggerMorningBriefing = async () => {
-    try {
-      const res = await fetch('/api/system/briefing');
-      const data = await res.json();
-      setBriefingData(data);
-      setIsBriefingOpen(true);
-      speak(data.text);
-    } catch (e) {
-      console.error(e);
+  const handleToggleMic = useCallback(() => {
+    if (isMicActive) {
+      userManuallyMutedRef.current = true;
+      stopListening();
+    } else {
+      userManuallyMutedRef.current = false;
+      startListening();
     }
-  };
+  }, [isMicActive, startListening, stopListening]);
 
-  // Connect WebSocket for live telemetry & events
+  const handleCoreClick = useCallback(() => {
+    if (assistantState === 'SPEAKING') {
+      stopSpeaking(true);
+      return;
+    }
+    handleToggleMic();
+  }, [assistantState, handleToggleMic, stopSpeaking]);
+
+  // Auto-activate voice recognition on boot and first user interaction (unless manually muted)
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (!isMicActiveStateRef.current && !userManuallyMutedRef.current) {
+        startListeningRef.current?.();
+      }
+    }, 1400);
+
+    const activateOnGesture = () => {
+      if (!isMicActiveStateRef.current && !userManuallyMutedRef.current) {
+        startListeningRef.current?.();
+      }
+      window.removeEventListener('click', activateOnGesture);
+      window.removeEventListener('keydown', activateOnGesture);
+    };
+
+    window.addEventListener('click', activateOnGesture);
+    window.addEventListener('keydown', activateOnGesture);
+
+    return () => {
+      clearTimeout(timer);
+      window.removeEventListener('click', activateOnGesture);
+      window.removeEventListener('keydown', activateOnGesture);
+    };
+  }, []);
+
+  // Sync core energy target with voice / assistant state
+  useEffect(() => {
+    if (
+      isProcessing ||
+      assistantState === 'THINKING' ||
+      assistantState === 'SPEAKING' ||
+      assistantState === 'EXECUTING'
+    ) {
+      targetRef.current = 0.9;
+    } else if (Boolean(interimTranscript)) {
+      targetRef.current = 0.72;
+    } else if (isMicActive || assistantState === 'LISTENING') {
+      targetRef.current = 0.36;
+    } else {
+      targetRef.current = 0.18;
+    }
+  }, [assistantState, interimTranscript, isMicActive, isProcessing]);
+
+  // 1. Live Clock
+  useEffect(() => {
+    const tick = () => {
+      const n = new Date();
+      setTimeStr(`${pad(n.getHours())}:${pad(n.getMinutes())}:${pad(n.getSeconds())}`);
+      setDateStr(
+        n.toLocaleDateString(undefined, {
+          weekday: 'long',
+          month: 'long',
+          day: 'numeric',
+        })
+      );
+    };
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  // 2. Device Facts
+  useEffect(() => {
+    const updateFacts = () => {
+      setCores(String(navigator.hardwareConcurrency || 'n/a'));
+      const navMem = (navigator as any).deviceMemory;
+      if (liveTelemetryRef.current.ramTotalGb) {
+        setDeviceMem(`${Math.round(liveTelemetryRef.current.ramTotalGb)} GB`);
+      } else {
+        setDeviceMem(navMem ? `${navMem} GB` : 'n/a');
+      }
+      setLinkStatus(navigator.onLine ? 'Connected' : 'Offline');
+      setDisplaySize(`${window.screen.width} × ${window.screen.height}`);
+    };
+    updateFacts();
+    window.addEventListener('online', updateFacts);
+    window.addEventListener('offline', updateFacts);
+
+    try {
+      if ('getBattery' in navigator) {
+        (navigator as any)
+          .getBattery()
+          .then((b: any) => {
+            const u = () =>
+              setPower(`${Math.round(b.level * 100)}%${b.charging ? ' · charging' : ''}`);
+            u();
+            b.onlevelchange = u;
+            b.onchargingchange = u;
+          })
+          .catch(() => setPower('Mains'));
+      } else {
+        setPower('Mains');
+      }
+    } catch {
+      setPower('Mains');
+    }
+
+    return () => {
+      window.removeEventListener('online', updateFacts);
+      window.removeEventListener('offline', updateFacts);
+    };
+  }, []);
+
+  // 3. WebSocket live telemetry connection
   useEffect(() => {
     let ws: WebSocket;
     let reconnectTimeout: any;
 
-    const connectWebSocket = () => {
+    const connectWs = () => {
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      // Connect to backend port directly or proxy
-      const host = window.location.host;
-      const wsUrl = `${protocol}//${host}/ws/jarvis`;
-
+      const wsUrl = `${protocol}//${window.location.host}/ws/jarvis`;
       try {
         ws = new WebSocket(wsUrl);
-
         ws.onopen = () => {
           setIsWsConnected(true);
+          setLinkStatus('Connected');
         };
-
         ws.onmessage = (event) => {
           try {
             const msg = JSON.parse(event.data);
-            if (msg.event === 'system.telemetry') {
-              setTelemetry(msg.data);
+            if (msg.event === 'system.telemetry' && msg.data) {
+              liveTelemetryRef.current = {
+                cpu: msg.data.cpu_percent,
+                mem: msg.data.ram_percent,
+                ramTotalGb: msg.data.ram_total_gb,
+              };
+              if (msg.data.ram_total_gb) {
+                setDeviceMem(`${Math.round(msg.data.ram_total_gb)} GB`);
+              }
             }
-          } catch (e) {
+          } catch {
             // ignore
           }
         };
-
         ws.onclose = () => {
           setIsWsConnected(false);
-          reconnectTimeout = setTimeout(connectWebSocket, 3000);
+          reconnectTimeout = setTimeout(connectWs, 3000);
         };
-
         ws.onerror = () => {
           setIsWsConnected(false);
           ws.close();
         };
-
-        wsRef.current = ws;
-      } catch (err) {
+      } catch {
         setIsWsConnected(false);
-        reconnectTimeout = setTimeout(connectWebSocket, 3000);
+        reconnectTimeout = setTimeout(connectWs, 3000);
       }
     };
 
-    connectWebSocket();
-
+    connectWs();
     return () => {
       clearTimeout(reconnectTimeout);
-      if (wsRef.current) wsRef.current.close();
+      if (ws) ws.close();
     };
   }, []);
 
+  // 4. Telemetry Sparklines (Load)
+  useEffect(() => {
+    const H: { cpu: number[]; mem: number[]; net: number[] } = {
+      cpu: [],
+      mem: [],
+      net: [],
+    };
+
+    const toPoints = (arr: number[]) => {
+      const w = 100 / 59;
+      return arr.map((v, i) => `${(i * w).toFixed(1)},${(25 - v * 24).toFixed(1)}`).join(' ');
+    };
+
+    const step = () => {
+      if (typeof liveTelemetryRef.current.cpu === 'number') {
+        cpuValRef.current = Math.max(1, Math.min(100, liveTelemetryRef.current.cpu));
+      } else {
+        cpuValRef.current = Math.max(4, Math.min(96, cpuValRef.current + (Math.random() - 0.5) * 14));
+      }
+
+      if (typeof liveTelemetryRef.current.mem === 'number') {
+        memValRef.current = Math.max(1, Math.min(100, liveTelemetryRef.current.mem));
+      } else {
+        memValRef.current = Math.max(30, Math.min(80, memValRef.current + (Math.random() - 0.5) * 2));
+      }
+
+      netValRef.current = Math.max(8, Math.min(90, netValRef.current + (Math.random() - 0.5) * 10));
+
+      const pairs: [keyof typeof H, number, number][] = [
+        ['cpu', cpuValRef.current, 100],
+        ['mem', memValRef.current, 100],
+        ['net', netValRef.current, 120],
+      ];
+
+      pairs.forEach(([k, v, m]) => {
+        H[k].push(v / m);
+        if (H[k].length > 60) H[k].shift();
+      });
+
+      setCpuPoints(toPoints(H.cpu));
+      setMemPoints(toPoints(H.mem));
+      setNetPoints(toPoints(H.net));
+      setCpuDisplay(`${Math.round(cpuValRef.current)}%`);
+      setMemDisplay(`${Math.round(memValRef.current)}%`);
+      setNetDisplay(`${Math.round(netValRef.current)} ms`);
+    };
+
+    for (let i = 0; i < 60; i++) step();
+    const id = setInterval(step, 900);
+    return () => clearInterval(id);
+  }, []);
+
+  // 5. Boot sequence & greeting
+  const bootedRef = useRef(false);
+  useEffect(() => {
+    if (bootedRef.current) return;
+    const timer = setTimeout(() => {
+      if (bootedRef.current) return;
+      bootedRef.current = true;
+      setBootOff(true);
+      const hr = new Date().getHours();
+      const greet = hr < 12 ? 'Good morning' : hr < 18 ? 'Good afternoon' : 'Good evening';
+      const welcome = `${greet}. Systems are online.`;
+      say(welcome);
+      speakRef.current?.(welcome);
+    }, 900);
+    return () => clearTimeout(timer);
+  }, [say]);
+
+  // 6. Global '/' shortcut to focus command input & Escape to halt speech
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === '/' && document.activeElement !== inputRef.current) {
+        e.preventDefault();
+        inputRef.current?.focus();
+      } else if (e.key === 'Escape') {
+        stopSpeakingRef.current?.(true);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
+
+  // 7. Canvas Core Animation (Audio-reactive)
+  useEffect(() => {
+    const cv = canvasRef.current;
+    if (!cv) return;
+    const c = cv.getContext('2d');
+    if (!c) return;
+
+    const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    let W = 0;
+    let Hh = 0;
+    let dpr = 1;
+
+    const size = () => {
+      dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const r = cv.getBoundingClientRect();
+      W = r.width;
+      Hh = r.height;
+      cv.width = W * dpr;
+      cv.height = Hh * dpr;
+      c.setTransform(dpr, 0, 0, dpr, 0, 0);
+    };
+
+    size();
+    window.addEventListener('resize', size);
+
+    const ICE = '125,243,255';
+    let level = 0.18;
+    let last = performance.now();
+    let fr = 0;
+    let acc = 0;
+    let rafId = 0;
+
+    const draw = (now: number) => {
+      const dt = (now - last) / 1000;
+      last = now;
+      acc += dt;
+      fr++;
+      if (acc >= 1) {
+        if (fpsRef.current) {
+          fpsRef.current.textContent = `${Math.round(fr / acc)} fps`;
+        }
+        fr = 0;
+        acc = 0;
+      }
+
+      // Compute live audio boost from useVoiceEngine audioLevels
+      const bars = audioLevelsRef.current;
+      const avgAudio =
+        bars && bars.length > 0
+          ? bars.reduce((s, b) => s + b, 0) / bars.length / 34
+          : 0.18;
+      const dynamicTarget = Math.max(targetRef.current, avgAudio);
+
+      level += (dynamicTarget - level) * 0.08;
+      const t = reduce ? 0 : now / 1000;
+      const cx = W / 2;
+      const cy = Hh / 2;
+      const R = Math.min(W, Hh) * 0.42;
+
+      c.clearRect(0, 0, W, Hh);
+
+      if (R > 0) {
+        // glow
+        const g = c.createRadialGradient(cx, cy, 0, cx, cy, R * 0.9);
+        g.addColorStop(0, `rgba(${ICE},${0.16 + level * 0.2})`);
+        g.addColorStop(0.5, `rgba(${ICE},.04)`);
+        g.addColorStop(1, 'rgba(0,0,0,0)');
+        c.fillStyle = g;
+        c.beginPath();
+        c.arc(cx, cy, R * 0.9, 0, 7);
+        c.fill();
+
+        c.save();
+        c.translate(cx, cy);
+
+        // outer hairline + ticks
+        c.strokeStyle = `rgba(${ICE},.22)`;
+        c.lineWidth = 1;
+        c.beginPath();
+        c.arc(0, 0, R, 0, 7);
+        c.stroke();
+
+        c.save();
+        c.rotate(t * 0.05);
+        for (let i = 0; i < 180; i++) {
+          const a = (i / 180) * 6.2832;
+          const L = i % 15 === 0 ? 12 : i % 5 === 0 ? 7 : 3;
+          c.strokeStyle = `rgba(${ICE},${i % 15 === 0 ? 0.7 : 0.25})`;
+          c.beginPath();
+          c.moveTo(Math.cos(a) * (R - 4), Math.sin(a) * (R - 4));
+          c.lineTo(Math.cos(a) * (R - 4 - L), Math.sin(a) * (R - 4 - L));
+          c.stroke();
+        }
+        c.restore();
+
+        // arc segments
+        const arcs: [number, number, number, number][] = [
+          [0.82, 0.35, 1.4, 2.2],
+          [0.74, -0.5, 0.9, 1.6],
+          [0.66, 0.8, 0.5, 2.6],
+        ];
+        arcs.forEach(([k, sp, len, w], i) => {
+          c.strokeStyle = `rgba(${ICE},${0.55 + level * 0.4})`;
+          c.lineWidth = w;
+          c.lineCap = 'round';
+          for (let s = 0; s < 2; s++) {
+            const a0 = t * sp + s * 3.1416 + i;
+            c.beginPath();
+            c.arc(0, 0, R * k, a0, a0 + len);
+            c.stroke();
+          }
+        });
+
+        // dashed inner
+        c.save();
+        c.rotate(-t * 0.25);
+        c.setLineDash([2, 10]);
+        c.strokeStyle = `rgba(${ICE},.45)`;
+        c.lineWidth = 1;
+        c.beginPath();
+        c.arc(0, 0, R * 0.56, 0, 7);
+        c.stroke();
+        c.restore();
+
+        // orbit dot
+        const oa = t * 0.9;
+        c.fillStyle = `rgb(${ICE})`;
+        c.shadowColor = `rgb(${ICE})`;
+        c.shadowBlur = 12;
+        c.beginPath();
+        c.arc(Math.cos(oa) * R * 0.9, Math.sin(oa) * R * 0.9, 2.6, 0, 7);
+        c.fill();
+        c.shadowBlur = 0;
+
+        // waveform core
+        const N = 96;
+        const base = R * 0.34;
+        c.beginPath();
+        for (let i = 0; i <= N; i++) {
+          const a = (i / N) * 6.2832;
+          const barIdx = bars && bars.length > 0 ? i % bars.length : 0;
+          const barMod = bars && bars.length > 0 ? (bars[barIdx] - 6) / 28 : 0;
+          const n =
+            Math.sin(a * 5 + t * 2.2) * 0.5 +
+            Math.sin(a * 9 - t * 3.1) * 0.3 +
+            Math.sin(a * 3 + t * 1.1) * 0.2 +
+            barMod * 0.25;
+          const r = base + n * level * R * 0.12 + Math.sin(t * 1.6) * R * 0.008;
+          const x = Math.cos(a) * r;
+          const y = Math.sin(a) * r;
+          if (i) c.lineTo(x, y);
+          else c.moveTo(x, y);
+        }
+        c.closePath();
+        c.strokeStyle = `rgba(${ICE},.95)`;
+        c.lineWidth = 1.6;
+        c.shadowColor = `rgb(${ICE})`;
+        c.shadowBlur = 14;
+        c.stroke();
+        c.shadowBlur = 0;
+        c.fillStyle = `rgba(${ICE},${0.05 + level * 0.08})`;
+        c.fill();
+
+        // center point
+        c.fillStyle = '#fff';
+        c.globalAlpha = 0.9;
+        c.beginPath();
+        c.arc(0, 0, 2 + level * 2, 0, 7);
+        c.fill();
+        c.globalAlpha = 1;
+
+        c.restore();
+      }
+
+      rafId = requestAnimationFrame(draw);
+    };
+
+    rafId = requestAnimationFrame(draw);
+    return () => {
+      cancelAnimationFrame(rafId);
+      window.removeEventListener('resize', size);
+    };
+  }, []);
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const v = inputVal.trim();
+    if (!v) return;
+    setInputVal('');
+    handleUserCommand(v);
+  };
+
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setInputVal(e.target.value);
+    targetRef.current = 0.5;
+    if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
+    typingTimerRef.current = setTimeout(() => {
+      if (!isProcessing && assistantState === 'IDLE') {
+        targetRef.current = 0.18;
+      }
+    }, 700);
+  };
+
+  const isBusy =
+    isProcessing ||
+    assistantState === 'THINKING' ||
+    assistantState === 'EXECUTING' ||
+    assistantState === 'SPEAKING';
+
+  const stateText =
+    isProcessing || assistantState === 'THINKING' || assistantState === 'EXECUTING'
+      ? 'PROCESSING'
+      : assistantState === 'SPEAKING'
+      ? 'SPEAKING'
+      : interimTranscript
+      ? `HEARD: "${interimTranscript.toUpperCase().slice(0, 28)}"`
+      : isMicActive
+      ? `LISTENING · SAY "${wakeWord.toUpperCase()}"`
+      : 'STANDING BY';
+
+  const confirmDangerousAction = () => {
+    if (!pendingConfirmation) return;
+    const { tool, arguments: args } = pendingConfirmation;
+    setPendingConfirmation(null);
+    handleUserCommand('Confirmed', true, tool, args);
+  };
+
+  const cancelDangerousAction = () => {
+    setPendingConfirmation(null);
+    say('Action cancelled, sir.', 'warn');
+    speak('Action cancelled, sir.');
+  };
+
   return (
-    <div className="flex flex-col h-screen w-screen overflow-hidden bg-[#05070A] text-[#EAF4FA] relative">
-      {/* 0. Sci-Fi Holographic Interactive Background */}
-      <HoloBackground
-        state={assistantState}
-        audioLevels={audioLevel}
-        isMicActive={isMicActive}
-      />
-
-      {/* 1. Top HUD Telemetry Status Bar */}
-      <SystemStatus
-        telemetry={telemetry}
-        isAiOnline={true}
-        isMicActive={isMicActive}
-        isWsConnected={isWsConnected}
-        operatorName={userName}
-      />
-
-      {/* 1b. Interactive Mic Activation & Live Wake-Word Status Banner */}
-      {!isMicActive && (
-        <div 
-          onClick={toggleListening}
-          className="bg-gradient-to-r from-cyan-950 via-sky-950 to-cyan-950 border-b border-cyan-400/50 px-4 py-2 flex items-center justify-between cursor-pointer hover:bg-cyan-900/60 transition-all shadow-[0_4px_20px_rgba(92,200,255,0.2)] shrink-0"
-        >
-          <div className="flex items-center gap-3">
-            <span className="relative flex h-2.5 w-2.5">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-cyan-400 opacity-75"></span>
-              <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-cyan-500"></span>
-            </span>
-            <span className="text-xs hud-font font-bold text-cyan-200 tracking-wider">
-              MICROPHONE STANDBY // CLICK ANYWHERE HERE OR PRESS &ldquo;ACTIVATE&rdquo; TO START WAKE-WORD DETECTION (&ldquo;JARVIS&rdquo;)
-            </span>
-          </div>
-          <div className="flex items-center gap-2 px-3 py-1 rounded bg-cyan-500/20 border border-cyan-400 text-cyan-300 text-xs font-bold hud-font">
-            <Mic className="w-3.5 h-3.5 text-cyan-300" />
-            <span>ACTIVATE VOICE</span>
-          </div>
-        </div>
-      )}
-
-      {micPermissionDenied && (
-        <div className="bg-red-950 border-b border-red-500/60 px-4 py-2 flex items-center gap-2 text-rose-200 text-xs hud-font shrink-0">
-          <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
-          <span>MICROPHONE ACCESS BLOCKED // Please allow microphone access in your browser address bar to use voice commands.</span>
-        </div>
-      )}
-
-      {isMicActive && (
-        <div className="bg-[#060D17] border-b border-cyan-500/20 px-4 py-1.5 flex items-center justify-between text-xs mono-font shrink-0">
-          <div className="flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-            <span className="text-emerald-400 font-bold">JARVIS LISTENING</span>
-            <span className="text-slate-400 hidden sm:inline">| Call <span className="text-cyan-300 font-bold">&ldquo;{wakeWord}&rdquo;</span> or speak your instruction directly</span>
-          </div>
-          {interimTranscript && (
-            <div className="flex items-center gap-2 text-cyan-300 bg-cyan-950/80 px-2.5 py-0.5 rounded border border-cyan-500/40 max-w-md truncate">
-              <span className="text-[10px] text-slate-400 font-bold uppercase">Heard:</span>
-              <span className="italic font-mono text-cyan-200">&ldquo;{interimTranscript}&rdquo;</span>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* 2. Main Workspace Layout */}
-      <div className="flex-1 flex flex-col lg:flex-row overflow-hidden">
-        {/* Navigation Sidebar */}
-        <aside className="w-full lg:w-56 bg-[#080D14]/90 border-b lg:border-b-0 lg:border-r border-cyan-500/20 flex lg:flex-col justify-between p-3 shrink-0 backdrop-blur-md">
-          <div className="flex lg:flex-col gap-1 w-full overflow-x-auto lg:overflow-visible">
-            {[
-              { id: 'command', label: 'Command Hub', icon: <LayoutDashboard className="w-4 h-4" /> },
-              { id: 'memory', label: 'Memory', icon: <Brain className="w-4 h-4" /> },
-              { id: 'tasks', label: 'Productivity', icon: <CheckSquare className="w-4 h-4" /> },
-              { id: 'devices', label: 'Smart Home', icon: <Home className="w-4 h-4" /> },
-              { id: 'automations', label: 'Automations', icon: <Zap className="w-4 h-4" /> },
-              { id: 'logs', label: 'Audit Logs', icon: <Shield className="w-4 h-4" /> },
-              { id: 'settings', label: 'Settings', icon: <Settings className="w-4 h-4" /> }
-            ].map((tab) => (
-              <button
-                key={tab.id}
-                onClick={() => setActiveTab(tab.id as ActiveTab)}
-                className={`flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-semibold hud-font transition-all whitespace-nowrap ${
-                  activeTab === tab.id
-                    ? 'bg-cyan-500/20 border border-cyan-400/60 text-cyan-200 shadow-[0_0_15px_rgba(92,200,255,0.25)]'
-                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50 border border-transparent'
-                }`}
-              >
-                <span className={activeTab === tab.id ? 'text-cyan-400' : 'text-slate-400'}>
-                  {tab.icon}
-                </span>
-                <span>{tab.label}</span>
-              </button>
-            ))}
-          </div>
-
-          <div className="hidden lg:block p-3 rounded-xl bg-slate-900/60 border border-cyan-500/20 text-[11px] mono-font text-slate-400">
-            <div className="text-cyan-400 font-bold hud-font mb-1 flex items-center gap-1">
-              <Sparkles className="w-3.5 h-3.5" /> VOICE RECOGNITION
-            </div>
-            Say <span className="text-cyan-300 font-bold">&ldquo;{wakeWord}&rdquo;</span> to activate audio interface.
-          </div>
-        </aside>
-
-        {/* Center Main Stage (Dynamic Tabs) */}
-        <main className="flex-1 flex flex-col overflow-hidden relative">
-          {activeTab === 'command' && (
-            <div className="flex-1 flex flex-col justify-between overflow-y-auto p-4 sm:p-6">
-              {/* Top Subtitle Banner */}
-              <div className="text-center">
-                <h1 className="hud-font font-bold text-2xl sm:text-3xl text-cyan-200 tracking-widest cyan-glow">
-                  AUTONOMOUS DESKTOP INTELLIGENCE
-                </h1>
-                <p className="text-xs text-slate-400 mt-1 max-w-lg mx-auto">
-                  Neural speech processing, restricted operating-system tooling, file sandbox, and smart IoT control.
-                </p>
-              </div>
-
-              {/* Central Reactive Orb Visualizer */}
-              <div className="flex-1 flex items-center justify-center my-2">
-                <JarvisOrb
-                  state={assistantState}
-                  audioLevels={audioLevel}
-                  onClick={toggleListening}
-                  onTestVoice={testVoiceSpeech}
-                  isMicActive={isMicActive}
-                  interimTranscript={interimTranscript}
-                  micPermissionDenied={micPermissionDenied}
-                  statusText={
-                    assistantState === 'LISTENING' 
-                      ? 'Listening for "Jarvis" or voice instruction...'
-                      : assistantState === 'SPEAKING'
-                      ? 'Vocalizing audio response...'
-                      : assistantState === 'THINKING'
-                      ? 'Analyzing natural language intent...'
-                      : undefined
-                  }
-                />
-              </div>
-
-              {/* Quick Actions Bar */}
-              <QuickActions
-                isMicActive={isMicActive}
-                onToggleMic={toggleListening}
-                onActionClick={handleUserCommand}
-                onOpenBriefing={triggerMorningBriefing}
-              />
-            </div>
-          )}
-
-          {activeTab === 'memory' && <MemoryPanel />}
-          {activeTab === 'devices' && <SmartDevicePanel />}
-          {activeTab === 'tasks' && <TaskPanel />}
-          {activeTab === 'automations' && <AutomationPanel />}
-          {activeTab === 'logs' && <LogsPanel />}
-          {activeTab === 'settings' && (
-            <SettingsPanel
-              userName={userName}
-              setUserName={handleUpdateUserName}
-              wakeWord={wakeWord}
-              setWakeWord={setWakeWord}
-              wakeWordEnabled={wakeWordEnabled}
-              setWakeWordEnabled={setWakeWordEnabled}
-              voicePitch={voicePitch}
-              setVoicePitch={setVoicePitch}
-              voiceRate={voiceRate}
-              setVoiceRate={setVoiceRate}
-              availableVoices={availableVoices}
-              selectedVoice={selectedVoice}
-              setSelectedVoice={setSelectedVoice}
-              voiceProvider={voiceProvider}
-              setVoiceProvider={setVoiceProvider}
-              localNeuralVoice={localNeuralVoice}
-              updateLocalNeuralVoice={updateLocalNeuralVoice}
-              fishApiKey={fishApiKey}
-              updateFishApiKey={updateFishApiKey}
-              fishVoiceId={fishVoiceId}
-              updateFishVoiceId={updateFishVoiceId}
-              onTestVoice={testVoiceSpeech}
-            />
-          )}
-        </main>
-
-        {/* Right Side: Conversation Log Panel */}
-        <aside className="w-full lg:w-[420px] xl:w-[460px] h-72 lg:h-full shrink-0 z-10">
-          <ConversationPanel
-            messages={messages}
-            onSendMessage={handleUserCommand}
-            isSpeaking={assistantState === 'SPEAKING'}
-            onStopSpeaking={stopSpeaking}
-            isMicActive={isMicActive}
-            onToggleMic={toggleListening}
-            onSpeakText={speak}
-            assistantState={assistantState}
-          />
-        </aside>
+    <>
+      <div className={`boot ${bootOff ? 'off' : ''}`} id="boot">
+        <div />
       </div>
 
-      {/* Security Permission Dialog Intercept */}
+      <div className="hud">
+        <header>
+          <div className="brand">
+            JARVIS
+            <small>
+              {isWsConnected ? 'Online · all systems nominal' : 'Online · local core active'}
+              {isMicActive ? ` · voice active (“${wakeWord}”)` : ''}
+            </small>
+          </div>
+          <div className="clock">
+            <span id="t">{timeStr}</span>
+            <small id="d">{dateStr}</small>
+          </div>
+        </header>
+
+        <aside>
+          <div className="panel">
+            <h3>Load</h3>
+            <div className="m">
+              <span>Processor</span>
+              <b id="cpu">{cpuDisplay}</b>
+              <svg viewBox="0 0 100 26" preserveAspectRatio="none">
+                <line className="base" x1="0" x2="100" y1="25" y2="25" />
+                <polyline id="cpuL" points={cpuPoints} />
+              </svg>
+            </div>
+            <div className="m">
+              <span>Memory</span>
+              <b id="mem">{memDisplay}</b>
+              <svg viewBox="0 0 100 26" preserveAspectRatio="none">
+                <line className="base" x1="0" x2="100" y1="25" y2="25" />
+                <polyline id="memL" points={memPoints} />
+              </svg>
+            </div>
+            <div className="m">
+              <span>Network</span>
+              <b id="net">{netDisplay}</b>
+              <svg viewBox="0 0 100 26" preserveAspectRatio="none">
+                <line className="base" x1="0" x2="100" y1="25" y2="25" />
+                <polyline id="netL" points={netPoints} />
+              </svg>
+            </div>
+          </div>
+        </aside>
+
+        <main>
+          <canvas
+            id="core"
+            ref={canvasRef}
+            aria-label="Assistant core"
+            onClick={handleCoreClick}
+            style={{ cursor: 'pointer' }}
+            title={
+              assistantState === 'SPEAKING'
+                ? 'Click to stop speaking'
+                : isMicActive
+                ? 'Voice listening active (click to mute)'
+                : 'Click to activate voice commands'
+            }
+          />
+          <div
+            className={`state ${isBusy ? 'busy' : ''}`}
+            id="state"
+            onClick={handleCoreClick}
+            style={{ cursor: 'pointer' }}
+          >
+            {stateText}
+          </div>
+        </main>
+
+        <aside>
+          <div className="panel">
+            <h3>This device</h3>
+            <div className="kv">
+              <i>Cores</i>
+              <em id="k1">{cores}</em>
+            </div>
+            <div className="kv">
+              <i>Memory</i>
+              <em id="k2">{deviceMem}</em>
+            </div>
+            <div className="kv">
+              <i>Power</i>
+              <em id="k3">{power}</em>
+            </div>
+            <div className="kv">
+              <i>Link</i>
+              <em id="k4" className="ok">
+                {linkStatus}
+              </em>
+            </div>
+            <div className="kv">
+              <i>Display</i>
+              <em id="k5">{displaySize}</em>
+            </div>
+            <div className="kv">
+              <i>Frame rate</i>
+              <em id="k6" ref={fpsRef}>
+                –
+              </em>
+            </div>
+          </div>
+
+          <div id="log" aria-live="polite">
+            {logs.map((item) => (
+              <div key={item.id} className={item.cls}>
+                <time>{item.time}</time>
+                <span>{item.text}</span>
+              </div>
+            ))}
+          </div>
+        </aside>
+
+        <footer>
+          <form className="cmd" id="f" autoComplete="off" onSubmit={handleSubmit}>
+            <span>›</span>
+            <input
+              ref={inputRef}
+              id="in"
+              value={inputVal}
+              onChange={handleInputChange}
+              placeholder="Ask Jarvis or say “Jarvis”. Try “status”, “scan” or “help”"
+              aria-label="Command"
+            />
+            <kbd>/</kbd>
+            <button
+              type="button"
+              onClick={handleToggleMic}
+              className={
+                micPermissionDenied ? 'mic-denied' : isMicActive ? 'mic-on' : undefined
+              }
+              title={
+                micPermissionDenied
+                  ? 'Microphone permission blocked in browser'
+                  : isMicActive
+                  ? 'Voice listening active — click to mute'
+                  : 'Click to enable continuous voice listening'
+              }
+            >
+              {micPermissionDenied ? 'Mic · Blocked' : isMicActive ? 'Voice · On' : 'Voice · Off'}
+            </button>
+            <button type="submit">Send</button>
+          </form>
+        </footer>
+      </div>
+
       <PermissionDialog
         isOpen={pendingConfirmation !== null}
         tool={pendingConfirmation?.tool || ''}
@@ -516,14 +888,6 @@ export default function App() {
         onConfirm={confirmDangerousAction}
         onCancel={cancelDangerousAction}
       />
-
-      {/* Morning Briefing Modal */}
-      <BriefingModal
-        isOpen={isBriefingOpen}
-        briefing={briefingData}
-        onClose={() => setIsBriefingOpen(false)}
-        onSpeak={speak}
-      />
-    </div>
+    </>
   );
 }

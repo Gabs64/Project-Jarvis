@@ -24,14 +24,22 @@ if exist "%ROOT_DIR%.venv\Scripts\python.exe" (
 ) else (
     where python >nul 2>nul
     if %errorlevel% equ 0 (
-        set "PYTHON_EXE=python"
-        echo [OK] System Python detected.
+        echo [SETUP] Creating Python virtual environment ^(.venv^)...
+        python -m venv "%ROOT_DIR%.venv"
+        set "PYTHON_EXE=%ROOT_DIR%.venv\Scripts\python.exe"
     ) else (
         echo [ERROR] Python was not found in .venv or system PATH.
         echo Please ensure Python is installed and configured.
         pause
         exit /b 1
     )
+)
+
+:: 1b. Verify Backend Python Dependencies
+"%PYTHON_EXE%" -c "import uvicorn, fastapi, greenlet" >nul 2>nul
+if %errorlevel% neq 0 (
+    echo [SETUP] Installing Python backend dependencies from requirements.txt...
+    "%PYTHON_EXE%" -m pip install -r "%ROOT_DIR%requirements.txt"
 )
 
 :: 2. Check Node.js / npm
@@ -43,6 +51,14 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 echo [OK] Node.js and npm detected.
+
+:: 2b. Verify Frontend Node Dependencies
+if not exist "%ROOT_DIR%frontend\node_modules" (
+    echo [SETUP] Installing frontend dependencies...
+    pushd "%ROOT_DIR%frontend"
+    call npm install
+    popd
+)
 
 :: 3. Check / Start Ollama if installed
 where ollama >nul 2>nul
@@ -76,9 +92,14 @@ echo [3/3] Establishing neural links and verifying services...
 
 :WAIT_LOOP
 ping 127.0.0.1 -n 3 >nul
+netstat -ano 2>nul | findstr ":8000" | findstr "LISTENING" >nul 2>nul
+if %errorlevel% neq 0 (
+    echo       ...waiting for Neural Core backend ^(port 8000^) to initialize...
+    goto WAIT_LOOP
+)
 netstat -ano 2>nul | findstr ":5173" | findstr "LISTENING" >nul 2>nul
 if %errorlevel% neq 0 (
-    echo       ...waiting for frontend UI to initialize...
+    echo       ...waiting for frontend UI ^(port 5173^) to initialize...
     goto WAIT_LOOP
 )
 

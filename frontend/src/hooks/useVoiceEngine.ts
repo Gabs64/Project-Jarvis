@@ -9,6 +9,7 @@ interface UseVoiceEngineProps {
   voicePitch?: number;
   voiceRate?: number;
   onSpeechRecognized: (transcript: string) => void;
+  onWakeWord?: () => void;
   onStateChange?: (state: AssistantState) => void;
 }
 
@@ -147,6 +148,7 @@ const isDirectCommand = (raw: string): boolean => {
     /^(?:turn\s+(?:on|off)|switch\s+(?:on|off))\b/i,
     /^(?:remind\s+me|set\s+(?:a\s+)?reminder)\b/i,
     /^(?:stop|quiet|cancel|silence)\b/i,
+    /^(?:status|scan|diagnostics|diagnostic|help|clear|time|date|briefing|morning\s+briefing)\b/i,
     /^spotify\b/i
   ];
   return directPatterns.some(pattern => pattern.test(lower));
@@ -158,6 +160,7 @@ export function useVoiceEngine({
   voicePitch = 0.95,
   voiceRate = 1.05,
   onSpeechRecognized,
+  onWakeWord,
   onStateChange
 }: UseVoiceEngineProps) {
   const [isMicActive, setIsMicActive] = useState(false);
@@ -209,6 +212,9 @@ export function useVoiceEngine({
 
   const onSpeechRecognizedRef = useRef(onSpeechRecognized);
   onSpeechRecognizedRef.current = onSpeechRecognized;
+
+  const onWakeWordRef = useRef(onWakeWord);
+  onWakeWordRef.current = onWakeWord;
 
   const onStateChangeRef = useRef(onStateChange);
   onStateChangeRef.current = onStateChange;
@@ -498,6 +504,7 @@ export function useVoiceEngine({
             lastWakeWordTimeRef.current = now;
             playAudioChime('wake');
             setInterimTranscript('Jarvis (Listening...)');
+            onWakeWordRef.current?.();
             speak("Yes, sir? How may I assist you?", undefined, true);
             updateState('LISTENING');
             scheduleListeningTimeout(15);
