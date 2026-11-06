@@ -1,5 +1,5 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { Terminal, RefreshCw, Trash2, ChevronRight, ChevronDown, CheckCircle2, AlertTriangle, Cpu, Command, ArrowRight } from 'lucide-react';
+import React, { useRef, useEffect } from 'react';
+import { Terminal as TerminalIcon, Trash2, Copy, Check } from 'lucide-react';
 
 export interface ConsoleLogEntry {
   id: string;
@@ -16,255 +16,181 @@ export interface ConsoleLogEntry {
 interface CommandConsoleProps {
   logs: ConsoleLogEntry[];
   onClear: () => void;
-  onRefresh: () => void;
+  onRefresh?: () => void;
   isRefreshing?: boolean;
 }
 
 export const CommandConsole: React.FC<CommandConsoleProps> = ({
   logs,
   onClear,
-  onRefresh,
-  isRefreshing = false,
 }) => {
-  const [filter, setFilter] = useState<'all' | 'cmds' | 'system'>('all');
-  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
-  const [autoScroll, setAutoScroll] = useState<boolean>(true);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const [copied, setCopied] = React.useState(false);
 
-  // Auto-scroll to bottom whenever new logs arrive if autoScroll is enabled
+  // Auto-scroll to bottom whenever new terminal output arrives
   useEffect(() => {
-    if (autoScroll && scrollRef.current) {
+    if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [logs, autoScroll]);
+  }, [logs]);
 
-  const toggleExpand = (id: string) => {
-    setExpandedIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) {
-        next.delete(id);
-      } else {
-        next.add(id);
+  const handleCopy = () => {
+    if (!scrollRef.current) return;
+    const text = scrollRef.current.innerText;
+    navigator.clipboard.writeText(text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  };
+
+  // Helper to format arguments as clean CLI flags: --param="value"
+  const formatCliArgs = (args?: Record<string, any>): string => {
+    if (!args || Object.keys(args).length === 0) return '';
+    return Object.entries(args)
+      .map(([k, v]) => {
+        const valStr = typeof v === 'object' ? JSON.stringify(v) : String(v);
+        return `--${k}=${valStr.length > 40 ? valStr.slice(0, 40) + '…' : valStr}`;
+      })
+      .join(' ');
+  };
+
+  // Helper to format result output
+  const formatResultOutput = (result?: any, details?: string): string => {
+    if (result === undefined || result === null) return details || 'execution finished';
+    if (typeof result === 'string') {
+      try {
+        const parsed = JSON.parse(result);
+        if (parsed.message) return parsed.message;
+        if (parsed.result) return typeof parsed.result === 'string' ? parsed.result : JSON.stringify(parsed.result);
+        return result;
+      } catch {
+        return result;
       }
-      return next;
-    });
-  };
-
-  const filteredLogs = logs.filter((log) => {
-    if (filter === 'cmds') return log.category === 'cmd';
-    if (filter === 'system') return log.category === 'brain' || log.category === 'event' || log.category === 'input';
-    return true;
-  });
-
-  const getStatusBadge = (status?: string, duration?: string) => {
-    if (status === 'SUCCESS') {
-      return (
-        <span className="console-badge console-badge-ok" title="Executed successfully">
-          <CheckCircle2 className="w-2.5 h-2.5 inline mr-0.5" />
-          {duration ? `${duration}` : 'OK'}
-        </span>
-      );
     }
-    if (status === 'ERROR') {
-      return (
-        <span className="console-badge console-badge-err" title="Execution error">
-          <AlertTriangle className="w-2.5 h-2.5 inline mr-0.5" />
-          ERR
-        </span>
-      );
+    if (typeof result === 'object') {
+      if (result.message) return result.message;
+      if (result.error) return `Error: ${result.error}`;
+      if (result.summary) return result.summary;
+      return JSON.stringify(result);
     }
-    if (status === 'PENDING') {
-      return (
-        <span className="console-badge console-badge-pending" title="Running">
-          RUNNING
-        </span>
-      );
-    }
-    return null;
-  };
-
-  const getCategoryIcon = (category: ConsoleLogEntry['category']) => {
-    switch (category) {
-      case 'cmd':
-        return <Command className="w-3 h-3 text-cyan-400 shrink-0" />;
-      case 'brain':
-        return <Cpu className="w-3 h-3 text-cyan-300 shrink-0" />;
-      case 'input':
-        return <ArrowRight className="w-3 h-3 text-slate-400 shrink-0" />;
-      case 'error':
-        return <AlertTriangle className="w-3 h-3 text-amber-400 shrink-0" />;
-      default:
-        return <Terminal className="w-3 h-3 text-cyan-500/70 shrink-0" />;
-    }
+    return String(result);
   };
 
   return (
-    <div className="panel console-panel">
-      {/* Console Header Bar */}
-      <div className="console-header">
-        <div className="console-title">
-          <div className="console-live-dot" />
-          <h3>OPERATIONS & COMMAND LOGS</h3>
-          <span className="console-count">{filteredLogs.length}</span>
+    <div className="terminal-window">
+      {/* Terminal Title Bar */}
+      <div className="terminal-titlebar">
+        <div className="terminal-traffic-lights">
+          <span className="terminal-dot dot-red" />
+          <span className="terminal-dot dot-yellow" />
+          <span className="terminal-dot dot-green" />
         </div>
 
-        <div className="console-actions">
-          <div className="console-filter-group">
-            <button
-              type="button"
-              className={`console-filter-btn ${filter === 'all' ? 'active' : ''}`}
-              onClick={() => setFilter('all')}
-            >
-              ALL
-            </button>
-            <button
-              type="button"
-              className={`console-filter-btn ${filter === 'cmds' ? 'active' : ''}`}
-              onClick={() => setFilter('cmds')}
-            >
-              CMDS
-            </button>
-            <button
-              type="button"
-              className={`console-filter-btn ${filter === 'system' ? 'active' : ''}`}
-              onClick={() => setFilter('system')}
-            >
-              SYS
-            </button>
-          </div>
+        <div className="terminal-title">
+          <TerminalIcon className="w-3 h-3 text-cyan-400" />
+          <span>jarvis@neural-core: ~/ops (tty1)</span>
+        </div>
 
+        <div className="terminal-actions">
           <button
             type="button"
-            className="console-icon-btn"
-            onClick={onRefresh}
-            title="Refresh logs from database"
+            className="terminal-action-btn"
+            onClick={handleCopy}
+            title="Copy terminal contents"
           >
-            <RefreshCw className={`w-3 h-3 ${isRefreshing ? 'animate-spin text-cyan-400' : ''}`} />
+            {copied ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
           </button>
-
           <button
             type="button"
-            className="console-icon-btn"
+            className="terminal-action-btn"
             onClick={onClear}
-            title="Clear console view"
+            title="Clear terminal"
           >
             <Trash2 className="w-3 h-3 hover:text-amber-400" />
           </button>
         </div>
       </div>
 
-      {/* Console Log Feed */}
-      <div
-        ref={scrollRef}
-        className="console-body"
-        onScroll={(e) => {
-          const el = e.currentTarget;
-          const isAtBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 30;
-          setAutoScroll(isAtBottom);
-        }}
-      >
-        {filteredLogs.length === 0 ? (
-          <div className="console-empty">
-            <Terminal className="w-5 h-5 text-cyan-500/30 mx-auto mb-1.5" />
-            <div>Awaiting system command execution...</div>
-            <span className="text-[10px] text-slate-600">Commands and tool telemetry will stream here in real-time.</span>
-          </div>
-        ) : (
-          filteredLogs.map((log) => {
-            const isExpanded = expandedIds.has(log.id);
-            const hasPayload = (log.args && Object.keys(log.args).length > 0) || Boolean(log.result);
+      {/* Terminal Screen Body */}
+      <div ref={scrollRef} className="terminal-screen">
+        <div className="terminal-motd">
+          <span className="term-cyan">JARVIS Core OS v2.0</span> — Autonomous Command Execution Engine
+          <br />
+          <span className="term-dim">Kernel initialized on port 8000. Type or speak commands to execute.</span>
+        </div>
+
+        {logs.map((log) => {
+          if (log.category === 'cmd') {
+            const toolName = log.title.replace(/^EXEC:\s*/i, '');
+            const cliArgs = formatCliArgs(log.args);
+            const resultMsg = formatResultOutput(log.result, log.details);
+            const isOk = log.status !== 'ERROR';
 
             return (
-              <div
-                key={log.id}
-                className={`console-entry console-entry-${log.category} ${hasPayload ? 'has-payload' : ''}`}
-                onClick={() => hasPayload && toggleExpand(log.id)}
-              >
-                <div className="console-entry-row">
-                  <div className="console-entry-meta">
-                    <span className="console-time">{log.timestamp}</span>
-                    {getCategoryIcon(log.category)}
-                  </div>
-
-                  <div className="console-entry-main">
-                    <div className="console-entry-title">
-                      <span className="console-tag">[{log.category.toUpperCase()}]</span>
-                      <span className="console-title-text">{log.title}</span>
-                    </div>
-
-                    {log.details && (
-                      <div className="console-details">
-                        {log.details}
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="console-entry-side">
-                    {getStatusBadge(log.status, log.duration)}
-                    {hasPayload && (
-                      <button
-                        type="button"
-                        className="console-expand-toggle"
-                        aria-label="Toggle details"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          toggleExpand(log.id);
-                        }}
-                      >
-                        {isExpanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
-                      </button>
-                    )}
-                  </div>
+              <div key={log.id} className="terminal-block">
+                <div className="terminal-line">
+                  <span className="term-time">{log.timestamp}</span>
+                  <span className="term-prompt">jarvis@core:~$</span>
+                  <span className="term-cmd">exec {toolName}</span>
+                  {cliArgs && <span className="term-args">{cliArgs}</span>}
                 </div>
-
-                {/* Collapsible Arguments & Output Results */}
-                {isExpanded && hasPayload && (
-                  <div className="console-payload" onClick={(e) => e.stopPropagation()}>
-                    {log.args && Object.keys(log.args).length > 0 && (
-                      <div className="console-payload-section">
-                        <span className="console-payload-label">ARGUMENTS:</span>
-                        <pre className="console-json">{JSON.stringify(log.args, null, 2)}</pre>
-                      </div>
-                    )}
-
-                    {log.result !== undefined && log.result !== null && (
-                      <div className="console-payload-section">
-                        <span className="console-payload-label">OUTPUT:</span>
-                        <pre className="console-json">
-                          {typeof log.result === 'object'
-                            ? JSON.stringify(log.result, null, 2)
-                            : String(log.result)}
-                        </pre>
-                      </div>
-                    )}
-                  </div>
-                )}
+                <div className="terminal-subline">
+                  <span className="term-indent">↳</span>
+                  <span className={isOk ? 'term-ok' : 'term-err'}>
+                    [{log.status || (isOk ? 'OK' : 'ERR')}]
+                  </span>
+                  <span className="term-output">{resultMsg}</span>
+                  {log.duration && <span className="term-dur">({log.duration})</span>}
+                </div>
               </div>
             );
-          })
-        )}
-      </div>
+          }
 
-      {/* Console Footer Status */}
-      <div className="console-footer">
-        <div className="console-footer-left">
-          <span className="console-footer-dot" />
-          <span>AUTONOMOUS KERNEL MONITOR</span>
+          if (log.category === 'input') {
+            const cleanCmd = log.details ? log.details.replace(/^›\s*"?|"?$/g, '') : log.title;
+            return (
+              <div key={log.id} className="terminal-line">
+                <span className="term-time">{log.timestamp}</span>
+                <span className="term-user-prompt">user@jarvis:~$</span>
+                <span className="term-user-cmd">{cleanCmd}</span>
+              </div>
+            );
+          }
+
+          if (log.category === 'brain') {
+            return (
+              <div key={log.id} className="terminal-line term-system-line">
+                <span className="term-time">{log.timestamp}</span>
+                <span className="term-sys-prefix">[brain::reason]</span>
+                <span className="term-sys-text">{log.details || log.title}</span>
+              </div>
+            );
+          }
+
+          if (log.category === 'error') {
+            return (
+              <div key={log.id} className="terminal-line term-error-line">
+                <span className="term-time">{log.timestamp}</span>
+                <span className="term-err-prefix">[kernel::error]</span>
+                <span className="term-err-text">{log.details || log.title}</span>
+              </div>
+            );
+          }
+
+          // General event / Voice / Telemetry
+          return (
+            <div key={log.id} className="terminal-line term-event-line">
+              <span className="term-time">{log.timestamp}</span>
+              <span className="term-event-prefix">[sys::telemetry]</span>
+              <span className="term-event-text">{log.details || log.title}</span>
+            </div>
+          );
+        })}
+
+        {/* Live Active Terminal Prompt with Blinking Cursor */}
+        <div className="terminal-active-line">
+          <span className="term-prompt">jarvis@core:~$</span>
+          <span className="terminal-cursor">▋</span>
         </div>
-        {!autoScroll && (
-          <button
-            type="button"
-            className="console-scroll-btn"
-            onClick={() => {
-              setAutoScroll(true);
-              if (scrollRef.current) {
-                scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-              }
-            }}
-          >
-            SCROLL TO BOTTOM ↓
-          </button>
-        )}
       </div>
     </div>
   );
