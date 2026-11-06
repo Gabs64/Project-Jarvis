@@ -81,11 +81,11 @@ for /f "tokens=5" %%a in ('netstat -aon 2^>nul ^| findstr ":5173" ^| findstr "LI
 
 :: 5. Launch Backend (FastAPI)
 echo [1/3] Launching JARVIS Neural Core Backend (Port 8000)...
-powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath '%PYTHON_EXE%' -ArgumentList '-m uvicorn main:app --host 127.0.0.1 --port 8000' -WorkingDirectory '%ROOT_DIR%backend' -WindowStyle Minimized"
+start "JARVIS_CORE" /min cmd /c "cd /d "%ROOT_DIR%backend" && "%PYTHON_EXE%" -m uvicorn main:app --host 127.0.0.1 --port 8000"
 
 :: 6. Launch Frontend (Vite React)
 echo [2/3] Launching Holographic Reactor Frontend (Port 5173)...
-powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath 'cmd.exe' -ArgumentList '/c npm run dev' -WorkingDirectory '%ROOT_DIR%frontend' -WindowStyle Minimized"
+start "JARVIS_FRONTEND" /min cmd /c "cd /d "%ROOT_DIR%frontend" && npm run dev"
 
 :: 7. Wait for servers to become active
 echo [3/3] Establishing neural links and verifying services...
@@ -105,7 +105,7 @@ if %errorlevel% neq 0 (
 
 :: 8. Launch Browser
 echo [ONLINE] Opening JARVIS in your default web browser...
-powershell -NoProfile -Command "Start-Process 'http://localhost:5173'"
+start "" "http://localhost:5173"
 
 :CONTROL_MENU
 echo.
@@ -133,7 +133,7 @@ goto CONTROL_MENU
 :OPEN_BROWSER
 echo.
 echo [JARVIS] Launching Web Interface...
-powershell -NoProfile -Command "Start-Process 'http://localhost:5173'"
+start "" "http://localhost:5173"
 ping 127.0.0.1 -n 2 >nul
 goto CONTROL_MENU
 
