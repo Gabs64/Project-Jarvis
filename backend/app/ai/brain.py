@@ -109,8 +109,23 @@ class JarvisBrain:
                     "pending_args": tool_args
                 }
                 
-            # Formulate verbal summary of tool execution
-            final_speech = self._synthesize_tool_speech(tool_name, tool_args, exec_result)
+            # Formulate verbal summary of tool execution with LLM synthesis when available
+            final_speech = None
+            if settings.AI_API_KEY or settings.LLM_PROVIDER == "ollama":
+                try:
+                    final_speech = await self._synthesize_with_llm(
+                        user_prompt=user_text_clean,
+                        tool_name=tool_name,
+                        tool_args=tool_args,
+                        exec_result=exec_result,
+                        tool_call_id=llm_decision.get("tool_call_id")
+                    )
+                except Exception as e:
+                    print(f"[JARVIS BRAIN] LLM tool synthesis error: {e}")
+
+            if not final_speech:
+                final_speech = self._synthesize_tool_speech(tool_name, tool_args, exec_result)
+
             self.conversation_history.append({"role": "assistant", "content": final_speech})
             
             return {
@@ -440,6 +455,82 @@ class JarvisBrain:
 
         return f"Action {tool_name} completed successfully, sir."
 
+    def _get_api_base(self) -> str:
+        if settings.AI_BASE_URL:
+            return settings.AI_BASE_URL.rstrip("/")
+        if "gemini" in settings.AI_MODEL.lower() or settings.LLM_PROVIDER == "gemini":
+            return "https://generativelanguage.googleapis.com/v1beta/openai"
+        if "groq" in settings.LLM_PROVIDER or "llama-3.3" in settings.AI_MODEL.lower() or "qwen" in settings.AI_MODEL.lower():
+            return "https://api.groq.com/openai/v1"
+        if settings.LLM_PROVIDER == "ollama":
+            return "http://localhost:11434/v1"
+        return "https://api.openai.com/v1"
+
+    async def _synthesize_with_llm(
+        self,
+        user_prompt: str,
+        tool_name: str,
+        tool_args: dict,
+        exec_result: dict,
+        tool_call_id: Optional[str] = None
+    ) -> Optional[str]:
+        """Calls the LLM with tool output to formulate a natural, complete response for the user."""
+        res_payload = exec_result.get("result", exec_result)
+
+        if isinstance(res_payload, dict) and "results" in res_payload:
+            compact = []
+            for item in res_payload.get("results", [])[:5]:
+                t = item.get("title", "")
+                s = item.get("summary", "")
+                compact.append(f"- {t}: {s}")
+            content_str = "\n".join(compact) or json.dumps(res_payload)[:2000]
+        else:
+            content_str = json.dumps(res_payload)[:2500]
+
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "You are J.A.R.V.I.S., a sophisticated personal AI assistant. "
+                    "You have just executed a system or web tool on behalf of the user. "
+                    "Synthesize the provided tool data and answer the user's inquiry directly, clearly, "
+                    "and concisely in natural British English prose. Address the user politely as 'sir'. "
+                    "Do NOT call any further tools, and do NOT output any XML, JSON, or code tags."
+                )
+            },
+            {"role": "user", "content": user_prompt},
+            {
+                "role": "user",
+                "content": f"[Tool '{tool_name}' executed with arguments {json.dumps(tool_args)}]\nTool Results:\n{content_str}\n\nPlease synthesize this data into your final verbal response to the user."
+            }
+        ]
+
+        headers = {"Content-Type": "application/json"}
+        if settings.AI_API_KEY:
+            headers["Authorization"] = f"Bearer {settings.AI_API_KEY}"
+
+        payload = {
+            "model": settings.AI_MODEL,
+            "messages": messages,
+            "temperature": 0.3,
+            "max_tokens": 450
+        }
+
+        api_base = self._get_api_base()
+        timeout_secs = 30.0 if settings.LLM_PROVIDER == "ollama" else 15.0
+        client = self._get_http_client(timeout_secs)
+
+        resp = await client.post(f"{api_base}/chat/completions", headers=headers, json=payload)
+        if resp.status_code == 200:
+            data = resp.json()
+            raw_text = data["choices"][0]["message"].get("content", "")
+            # Clean any stray tool tags if generated
+            cleaned_text = re.sub(r"<tool_call>.*?</tool_call>", "", raw_text, flags=re.DOTALL)
+            cleaned_text = re.sub(r"<function=.*?</function>", "", cleaned_text, flags=re.DOTALL)
+            cleaned_text = re.sub(r"<[^>]+>", "", cleaned_text).strip()
+            return cleaned_text or raw_text
+        return None
+
     async def _call_cloud_llm(self, prompt: str) -> Optional[dict]:
         """Calls Gemini, OpenAI, Groq, or Ollama-compatible endpoint with tool definitions and fallbacks."""
         headers = {
@@ -447,15 +538,6 @@ class JarvisBrain:
         }
         if settings.AI_API_KEY:
             headers["Authorization"] = f"Bearer {settings.AI_API_KEY}"
-        
-        # Check if user input is an action request vs conversational query
-        prompt_lower = prompt.lower()
-        is_action_request = any(kw in prompt_lower for kw in [
-            "open", "launch", "start", "close", "kill", "cpu", "ram", "memory", 
-            "battery", "disk", "status", "screenshot", "lock", "search", "folder", 
-            "directory", "remind", "task", "todo", "device", "light", "lamp", 
-            "switch", "turn on", "turn off", "briefing", "weather", "alarm", "remember"
-        ])
 
         # Ensure the prompt is in the conversation history as the latest user message
         messages = [
@@ -468,26 +550,12 @@ class JarvisBrain:
         payload: dict[str, Any] = {
             "model": settings.AI_MODEL,
             "messages": messages,
-            "temperature": 0.4,
-            "max_tokens": 220
+            "temperature": 0.35,
+            "max_tokens": 600,
+            "tools": tool_registry.get_all_schemas()
         }
 
-        # Include tool schemas only when the prompt looks like an action/tool request
-        if is_action_request:
-            payload["tools"] = tool_registry.get_all_schemas()
-        
-        # Determine API base URL
-        if settings.AI_BASE_URL:
-            api_base = settings.AI_BASE_URL.rstrip("/")
-        elif "gemini" in settings.AI_MODEL.lower() or settings.LLM_PROVIDER == "gemini":
-            api_base = "https://generativelanguage.googleapis.com/v1beta/openai"
-        elif "groq" in settings.LLM_PROVIDER or "llama-3.3" in settings.AI_MODEL.lower():
-            api_base = "https://api.groq.com/openai/v1"
-        elif settings.LLM_PROVIDER == "ollama":
-            api_base = "http://localhost:11434/v1"
-        else:
-            api_base = "https://api.openai.com/v1"
-
+        api_base = self._get_api_base()
         timeout_secs = 60.0 if settings.LLM_PROVIDER == "ollama" else 20.0
         client = self._get_http_client(timeout_secs)
 
@@ -505,8 +573,9 @@ class JarvisBrain:
                 
                 # 1. Native OpenAI-style tool calls
                 if "tool_calls" in choice and choice["tool_calls"]:
-                    tc = choice["tool_calls"][0]["function"]
-                    args = tc.get("arguments", {})
+                    tc = choice["tool_calls"][0]
+                    tc_fn = tc["function"]
+                    args = tc_fn.get("arguments", {})
                     if isinstance(args, str):
                         try:
                             args = json.loads(args)
@@ -514,9 +583,10 @@ class JarvisBrain:
                             args = {}
                     return {
                         "tool_call": {
-                            "name": tc["name"],
+                            "name": tc_fn["name"],
                             "arguments": args
-                        }
+                        },
+                        "tool_call_id": tc.get("id", "call_1")
                     }
                 
                 content = choice.get("content", "")
@@ -544,10 +614,29 @@ class JarvisBrain:
                                 "tool_call": {
                                     "name": tool_name,
                                     "arguments": tool_args
-                                }
+                                },
+                                "tool_call_id": "call_text_json"
                             }
                     except Exception:
                         pass
+
+                # 3. Check if model replied with text saying it will search or look up without a structured tool_call
+                search_text_match = re.search(
+                    r'(?:perform a (?:quick )?web search|searching for|let me (?:search|look up)|looking up|querying the web for)\s+["\']?([^"\'.\n]+)',
+                    content,
+                    re.IGNORECASE
+                )
+                if search_text_match:
+                    search_q = search_text_match.group(1).strip()
+                    search_q = re.sub(r'\s+(?:as|because|since)\s+.*$', '', search_q, flags=re.IGNORECASE)
+                    if search_q:
+                        return {
+                            "tool_call": {
+                                "name": "search_web",
+                                "arguments": {"query": search_q}
+                            },
+                            "tool_call_id": "call_search_text"
+                        }
 
                 return {"reply": content}
             else:

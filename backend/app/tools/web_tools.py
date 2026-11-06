@@ -5,10 +5,53 @@ import httpx
 def search_web(query: str, max_results: int = 5) -> dict:
     """Performs web search and returns structured results."""
     results = []
-    
-    # Try using duckduckgo_search library
+
+    # 1. Primary: Direct fast HTML search via DuckDuckGo
     try:
-        from duckduckgo_search import DDGS
+        from lxml import html
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+        }
+        resp = httpx.post(
+            "https://html.duckduckgo.com/html/",
+            data={"q": query},
+            headers=headers,
+            timeout=7.0
+        )
+        if resp.status_code == 200:
+            tree = html.fromstring(resp.text)
+            for node in tree.xpath('//div[contains(@class, "result__body")]'):
+                title_nodes = node.xpath('.//a[contains(@class, "result__a")]')
+                snippet_nodes = node.xpath('.//a[contains(@class, "result__snippet")]')
+                if title_nodes and snippet_nodes:
+                    title = title_nodes[0].text_content().strip()
+                    url = title_nodes[0].get("href", "")
+                    snippet = snippet_nodes[0].text_content().strip()
+                    if title and snippet:
+                        results.append({
+                            "title": title,
+                            "url": url,
+                            "summary": snippet
+                        })
+                if len(results) >= max_results:
+                    break
+
+        if results:
+            return {
+                "success": True,
+                "query": query,
+                "count": len(results),
+                "results": results
+            }
+    except Exception:
+        pass
+
+    # 2. Secondary: ddgs / duckduckgo_search library
+    try:
+        try:
+            from ddgs import DDGS
+        except ImportError:
+            from duckduckgo_search import DDGS
         with DDGS() as ddgs:
             raw_results = list(ddgs.text(query, max_results=max_results))
             for item in raw_results:
@@ -24,7 +67,7 @@ def search_web(query: str, max_results: int = 5) -> dict:
                 "count": len(results),
                 "results": results
             }
-    except Exception as err:
+    except Exception:
         pass
         
     # Fallback to direct HTTP endpoint or simulated results
