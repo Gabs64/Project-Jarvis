@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useVoiceEngine } from './hooks/useVoiceEngine';
 import { PermissionDialog } from './components/PermissionDialog';
+import { CommandConsole, type ConsoleLogEntry } from './components/CommandConsole';
 
 interface LogEntry {
   id: string;
@@ -35,6 +36,8 @@ export default function App() {
 
   // Log & Command state
   const [logs, setLogs] = useState<LogEntry[]>([]);
+  const [consoleLogs, setConsoleLogs] = useState<ConsoleLogEntry[]>([]);
+  const [isRefreshingConsole, setIsRefreshingConsole] = useState(false);
   const [inputVal, setInputVal] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
   const [isWsConnected, setIsWsConnected] = useState(false);
@@ -91,6 +94,67 @@ export default function App() {
     });
     return id;
   }, []);
+
+  const addConsoleLog = useCallback(
+    (
+      entry: Omit<ConsoleLogEntry, 'id' | 'timestamp'> & {
+        id?: string;
+        timestamp?: string;
+      }
+    ) => {
+      const id = entry.id || `cl-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+      const timestamp = entry.timestamp || new Date().toLocaleTimeString();
+      setConsoleLogs((prev) => {
+        const next = [...prev, { ...entry, id, timestamp }];
+        return next.length > 120 ? next.slice(next.length - 120) : next;
+      });
+    },
+    []
+  );
+
+  const fetchInitialToolLogs = useCallback(async () => {
+    setIsRefreshingConsole(true);
+    try {
+      const res = await fetch('/api/logs?limit=30');
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data)) {
+          const formatted: ConsoleLogEntry[] = data.reverse().map((item: any) => ({
+            id: `audit-${item.id}`,
+            timestamp: item.timestamp
+              ? item.timestamp.includes(' ')
+                ? item.timestamp.split(' ')[1]
+                : item.timestamp
+              : new Date().toLocaleTimeString(),
+            category: 'cmd' as const,
+            title: `EXEC: ${item.tool}`,
+            details: item.user_command ? `› "${item.user_command}"` : undefined,
+            args: item.arguments,
+            result: item.result,
+            status: item.status === 'ERROR' ? ('ERROR' as const) : ('SUCCESS' as const),
+            duration:
+              typeof item.execution_time === 'number'
+                ? `${item.execution_time}s`
+                : undefined,
+          }));
+
+          setConsoleLogs((prev) => {
+            const existingIds = new Set(prev.map((p) => p.id));
+            const fresh = formatted.filter((f) => !existingIds.has(f.id));
+            return [...fresh, ...prev].slice(-120);
+          });
+        }
+      }
+    } catch (err) {
+      console.warn('Failed to load initial tool audit logs:', err);
+    } finally {
+      setIsRefreshingConsole(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchInitialToolLogs();
+  }, [fetchInitialToolLogs]);
 
   const updateSubtitle = useCallback((id: string, text: string, isDone: boolean) => {
     setLogs((prev) =>
@@ -220,6 +284,12 @@ export default function App() {
 
       if (!confirmed) {
         say('› ' + v, 'me');
+        addConsoleLog({
+          category: 'input',
+          title: 'USER COMMAND',
+          details: `› "${v}"`,
+          status: 'INFO',
+        });
       }
 
       // Check voice confirmation for pending dangerous action
@@ -228,10 +298,22 @@ export default function App() {
         if (['yes', 'proceed', 'confirm', 'do it', 'sure'].some((w) => lower.includes(w))) {
           const { tool, arguments: args } = pendingConfirmation;
           setPendingConfirmation(null);
+          addConsoleLog({
+            category: 'cmd',
+            title: `SECURITY CLEARANCE GRANTED`,
+            details: `User confirmed execution of ${tool}`,
+            status: 'SUCCESS',
+          });
           handleUserCommand('Confirmed', true, tool, args);
           return;
         } else if (['no', 'cancel', 'stop', 'abort'].some((w) => lower.includes(w))) {
           setPendingConfirmation(null);
+          addConsoleLog({
+            category: 'cmd',
+            title: `SECURITY ACTION ABORTED`,
+            details: `User rejected clearance request`,
+            status: 'ERROR',
+          });
           const reply = 'Action cancelled, sir.';
           const id = say(reply, 'warn', true);
           speakWithSubtitles(id, reply);
@@ -241,6 +323,12 @@ export default function App() {
 
       setIsProcessing(true);
       targetRef.current = 0.9;
+      addConsoleLog({
+        category: 'brain',
+        title: 'REASONING PIPELINE',
+        details: 'Evaluating intent & dispatching autonomous tools...',
+        status: 'PENDING',
+      });
 
       // Built-in quick HUD diagnostics
       if (key === 'scan' || key === 'diagnostics' || key === 'diagnostic' || key === 'help') {
@@ -249,6 +337,13 @@ export default function App() {
           const id = say(reply, undefined, true);
           setIsProcessing(false);
           targetRef.current = 0.18;
+          addConsoleLog({
+            category: 'cmd',
+            title: `BUILTIN: ${key.toUpperCase()}`,
+            details: `Local HUD diagnostic executed`,
+            status: 'SUCCESS',
+            duration: '0.01s',
+          });
           speakWithSubtitles(id, reply);
         }, 650);
         return;
@@ -282,17 +377,52 @@ export default function App() {
             promptText: data.text,
             riskLevel: 'HIGH',
           });
+          addConsoleLog({
+            category: 'cmd',
+            title: `SECURITY CLEARANCE REQUIRED`,
+            details: `Action "${data.pending_tool}" requires explicit user confirmation`,
+            args: data.pending_args,
+            status: 'ERROR',
+          });
+        }
+
+        if (data.tool_calls && Array.isArray(data.tool_calls) && data.tool_calls.length > 0) {
+          for (const tc of data.tool_calls) {
+            addConsoleLog({
+              category: 'cmd',
+              title: `EXEC: ${tc.tool}`,
+              details: tc.tool,
+              args: tc.arguments,
+              result: tc.result,
+              status: tc.result?.success === false ? 'ERROR' : 'SUCCESS',
+              duration: tc.result?.execution_time_seconds
+                ? `${tc.result.execution_time_seconds}s`
+                : undefined,
+            });
+          }
         }
 
         const replyText = data.text || 'Command executed, sir.';
         const id = say(replyText, data.requires_confirmation ? 'warn' : undefined, true);
         setIsProcessing(false);
         targetRef.current = 0.18;
+        addConsoleLog({
+          category: 'event',
+          title: 'CORE SYNTHESIS',
+          details: `Output generated: "${replyText.length > 40 ? replyText.slice(0, 40) + '...' : replyText}"`,
+          status: 'SUCCESS',
+        });
         speakWithSubtitles(id, replyText);
       } catch {
         const fallback = localCmds(key);
         setIsProcessing(false);
         targetRef.current = 0.18;
+        addConsoleLog({
+          category: 'error',
+          title: 'EXECUTION FALLBACK',
+          details: `Neural Core chat route error, executing client fallback`,
+          status: 'ERROR',
+        });
         if (fallback) {
           const id = say(fallback, undefined, true);
           speakWithSubtitles(id, fallback);
@@ -303,7 +433,7 @@ export default function App() {
         }
       }
     },
-    [localCmds, pendingConfirmation, say, speakWithSubtitles]
+    [addConsoleLog, localCmds, pendingConfirmation, say, speakWithSubtitles]
   );
 
   const handleWakeWord = useCallback(() => {
@@ -498,6 +628,26 @@ export default function App() {
               if (coresVal) {
                 setCores(String(coresVal));
               }
+            } else if (msg.event === 'tool.complete' && msg.data) {
+              const tc = msg.data;
+              addConsoleLog({
+                id: `ws-tool-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+                timestamp: tc.timestamp || new Date().toLocaleTimeString(),
+                category: 'cmd',
+                title: `EXEC: ${tc.tool}`,
+                details: tc.user_command ? `› "${tc.user_command}"` : `Tool executed: ${tc.tool}`,
+                args: tc.arguments,
+                result: tc.result,
+                status: tc.status === 'ERROR' ? 'ERROR' : 'SUCCESS',
+                duration: typeof tc.execution_time === 'number' ? `${tc.execution_time}s` : undefined,
+              });
+            } else if (msg.event === 'assistant.ready') {
+              addConsoleLog({
+                category: 'event',
+                title: 'CORE TELEMETRY LINK',
+                details: msg.data?.message || 'Neural Core operational on port 8000',
+                status: 'SUCCESS',
+              });
             }
           } catch {
             // ignore
@@ -522,7 +672,7 @@ export default function App() {
       clearTimeout(reconnectTimeout);
       if (ws) ws.close();
     };
-  }, []);
+  }, [addConsoleLog]);
 
   // 4. Telemetry Sparklines (Load)
   useEffect(() => {
@@ -897,6 +1047,13 @@ export default function App() {
               </svg>
             </div>
           </div>
+
+          <CommandConsole
+            logs={consoleLogs}
+            onClear={() => setConsoleLogs([])}
+            onRefresh={fetchInitialToolLogs}
+            isRefreshing={isRefreshingConsole}
+          />
         </aside>
 
         <main>

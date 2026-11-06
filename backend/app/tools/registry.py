@@ -141,6 +141,25 @@ class ToolRegistry:
         except Exception:
             pass
 
+        # Broadcast real-time execution event to connected HUD console
+        try:
+            from app.api.websocket import manager
+            import datetime
+            asyncio.create_task(manager.broadcast({
+                "event": "tool.complete",
+                "data": {
+                    "tool": name,
+                    "arguments": arguments,
+                    "result": result_data,
+                    "status": status,
+                    "execution_time": elapsed,
+                    "user_command": user_command,
+                    "timestamp": datetime.datetime.now().strftime("%H:%M:%S")
+                }
+            }))
+        except Exception:
+            pass
+
         return {
             "success": status == "SUCCESS",
             "tool": name,
