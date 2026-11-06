@@ -273,6 +273,32 @@ main {
   color: var(--warn);
 }
 
+#log span.is-streaming {
+  color: #c9f5ff;
+  text-shadow: 0 0 7px rgba(125, 243, 255, 0.3);
+}
+
+.subtitle-cursor {
+  display: inline-block;
+  color: var(--cyan);
+  font-weight: 700;
+  margin-left: 3px;
+  animation: subtitle-blink 0.65s infinite ease-in-out;
+  text-shadow: 0 0 8px rgba(125, 243, 255, 0.7);
+  user-select: none;
+}
+
+@keyframes subtitle-blink {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1.05);
+  }
+  50% {
+    opacity: 0.15;
+    transform: scale(0.95);
+  }
+}
+
 footer {
   grid-column: 1 / -1;
   display: flex;

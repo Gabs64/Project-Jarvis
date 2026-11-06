@@ -6,7 +6,9 @@ interface LogEntry {
   id: string;
   time: string;
   text: string;
+  fullText?: string;
   cls?: string;
+  isStreaming?: boolean;
 }
 
 const pad = (n: number) => String(n).padStart(2, '0');
@@ -59,9 +61,10 @@ export default function App() {
   const netValRef = useRef<number>(24);
 
   const stopSpeakingRef = useRef<((interrupted?: boolean) => void) | null>(null);
-  const speakRef = useRef<((text: string, onEnd?: () => void) => void) | null>(null);
+  const speakRef = useRef<((text: string, onEnd?: () => void, keepListeningAfter?: boolean, onProgress?: (textSpokenSoFar: string, isFinished: boolean) => void) => void) | null>(null);
   const startListeningRef = useRef<(() => void) | null>(null);
   const isMicActiveStateRef = useRef<boolean>(false);
+  const activeStreamerTimerRef = useRef<any>(null);
 
   const wakeWord = import.meta.env.VITE_WAKE_WORD || 'jarvis';
   const wakeWordEnabled = import.meta.env.VITE_WAKE_WORD_ENABLED
@@ -70,19 +73,92 @@ export default function App() {
   const voicePitch = Number(import.meta.env.VITE_VOICE_PITCH) || 0.95;
   const voiceRate = Number(import.meta.env.VITE_VOICE_RATE) || 1.05;
 
-  const say = useCallback((txt: string, cls?: string) => {
+  const say = useCallback((txt: string, cls?: string, isStreaming: boolean = false): string => {
     const n = new Date();
+    const id = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     const entry: LogEntry = {
-      id: `${Date.now()}-${Math.random()}`,
+      id,
       time: `${pad(n.getHours())}:${pad(n.getMinutes())}`,
-      text: txt,
+      text: isStreaming ? '' : txt,
+      fullText: txt,
       cls,
+      isStreaming,
     };
     setLogs((prev) => {
       const next = [...prev, entry];
       return next.length > 8 ? next.slice(next.length - 8) : next;
     });
+    return id;
   }, []);
+
+  const updateSubtitle = useCallback((id: string, text: string, isDone: boolean) => {
+    setLogs((prev) =>
+      prev.map((item) =>
+        item.id === id
+          ? {
+              ...item,
+              text,
+              isStreaming: !isDone,
+            }
+          : item
+      )
+    );
+  }, []);
+
+  const speakWithSubtitles = useCallback(
+    (id: string, text: string, onDone?: () => void) => {
+      if (activeStreamerTimerRef.current) {
+        clearInterval(activeStreamerTimerRef.current);
+        activeStreamerTimerRef.current = null;
+      }
+
+      let receivedAudioProgress = false;
+      const words = text.split(/(\s+)/);
+      let fallbackTokenIdx = 0;
+
+      // Typewriter fallback in case audio is blocked or loading
+      const fallbackTimer = setTimeout(() => {
+        if (!receivedAudioProgress) {
+          activeStreamerTimerRef.current = setInterval(() => {
+            fallbackTokenIdx += 2;
+            if (fallbackTokenIdx >= words.length) {
+              if (activeStreamerTimerRef.current) {
+                clearInterval(activeStreamerTimerRef.current);
+                activeStreamerTimerRef.current = null;
+              }
+              updateSubtitle(id, text, true);
+            } else {
+              updateSubtitle(id, words.slice(0, fallbackTokenIdx).join(''), false);
+            }
+          }, 45);
+        }
+      }, 550);
+
+      speakRef.current?.(
+        text,
+        () => {
+          clearTimeout(fallbackTimer);
+          if (activeStreamerTimerRef.current) {
+            clearInterval(activeStreamerTimerRef.current);
+            activeStreamerTimerRef.current = null;
+          }
+          updateSubtitle(id, text, true);
+          onDone?.();
+        },
+        false,
+        (textSpokenSoFar, isDone) => {
+          receivedAudioProgress = true;
+          clearTimeout(fallbackTimer);
+          if (activeStreamerTimerRef.current) {
+            clearInterval(activeStreamerTimerRef.current);
+            activeStreamerTimerRef.current = null;
+          }
+          updateSubtitle(id, isDone ? text : textSpokenSoFar, isDone);
+        }
+      );
+    },
+    [updateSubtitle]
+  );
 
   const localCmds = useCallback((key: string): string | null | undefined => {
     switch (key) {
@@ -113,6 +189,13 @@ export default function App() {
       if (!v) return;
 
       stopSpeakingRef.current?.(true);
+      if (activeStreamerTimerRef.current) {
+        clearInterval(activeStreamerTimerRef.current);
+        activeStreamerTimerRef.current = null;
+      }
+      setLogs((prev) =>
+        prev.map((l) => (l.isStreaming ? { ...l, text: l.fullText || l.text, isStreaming: false } : l))
+      );
 
       const key = v.toLowerCase().replace(/[^a-z]/g, '');
       if (key === 'clear') {
@@ -134,8 +217,9 @@ export default function App() {
           return;
         } else if (['no', 'cancel', 'stop', 'abort'].some((w) => lower.includes(w))) {
           setPendingConfirmation(null);
-          say('Action cancelled, sir.', 'warn');
-          speakRef.current?.('Action cancelled, sir.');
+          const reply = 'Action cancelled, sir.';
+          const id = say(reply, 'warn', true);
+          speakWithSubtitles(id, reply);
           return;
         }
       }
@@ -147,10 +231,10 @@ export default function App() {
       if (key === 'scan' || key === 'diagnostics' || key === 'diagnostic' || key === 'help') {
         const reply = localCmds(key)!;
         setTimeout(() => {
-          say(reply);
+          const id = say(reply, undefined, true);
           setIsProcessing(false);
           targetRef.current = 0.18;
-          speakRef.current?.(reply);
+          speakWithSubtitles(id, reply);
         }, 650);
         return;
       }
@@ -186,31 +270,33 @@ export default function App() {
         }
 
         const replyText = data.text || 'Command executed, sir.';
-        say(replyText, data.requires_confirmation ? 'warn' : undefined);
+        const id = say(replyText, data.requires_confirmation ? 'warn' : undefined, true);
         setIsProcessing(false);
         targetRef.current = 0.18;
-        speakRef.current?.(replyText);
+        speakWithSubtitles(id, replyText);
       } catch {
         const fallback = localCmds(key);
         setIsProcessing(false);
         targetRef.current = 0.18;
         if (fallback) {
-          say(fallback);
-          speakRef.current?.(fallback);
+          const id = say(fallback, undefined, true);
+          speakWithSubtitles(id, fallback);
         } else {
           const msg = `I don’t know “${v}” yet. Type help to see what I can do.`;
-          say(msg, 'warn');
-          speakRef.current?.(msg);
+          const id = say(msg, 'warn', true);
+          speakWithSubtitles(id, msg);
         }
       }
     },
-    [localCmds, pendingConfirmation, say]
+    [localCmds, pendingConfirmation, say, speakWithSubtitles]
   );
 
   const handleWakeWord = useCallback(() => {
     say('› ' + wakeWord, 'me');
-    say('Yes, sir? How may I assist you?');
-  }, [say, wakeWord]);
+    const reply = 'Yes, sir? How may I assist you?';
+    const id = say(reply, undefined, true);
+    speakWithSubtitles(id, reply);
+  }, [say, speakWithSubtitles, wakeWord]);
 
   const {
     isMicActive,
@@ -486,11 +572,11 @@ export default function App() {
       const hr = new Date().getHours();
       const greet = hr < 12 ? 'Good morning' : hr < 18 ? 'Good afternoon' : 'Good evening';
       const welcome = `${greet}. Systems are online.`;
-      say(welcome);
-      speakRef.current?.(welcome);
+      const id = say(welcome, undefined, true);
+      speakWithSubtitles(id, welcome);
     }, 900);
     return () => clearTimeout(timer);
-  }, [say]);
+  }, [say, speakWithSubtitles]);
 
   // 6. Global '/' shortcut to focus command input & Escape to halt speech
   useEffect(() => {
@@ -852,7 +938,10 @@ export default function App() {
             {logs.map((item) => (
               <div key={item.id} className={item.cls}>
                 <time>{item.time}</time>
-                <span>{item.text}</span>
+                <span className={item.isStreaming ? 'is-streaming' : undefined}>
+                  {item.text}
+                  {item.isStreaming && <span className="subtitle-cursor">▋</span>}
+                </span>
               </div>
             ))}
           </div>

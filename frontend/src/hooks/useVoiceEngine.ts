@@ -11,6 +11,7 @@ interface UseVoiceEngineProps {
   onSpeechRecognized: (transcript: string) => void;
   onWakeWord?: () => void;
   onStateChange?: (state: AssistantState) => void;
+  onSpeechProgress?: (textSpokenSoFar: string, isFinished: boolean) => void;
 }
 
 // Shared AudioContext for chimes
@@ -162,8 +163,13 @@ export function useVoiceEngine({
   voiceRate = 1.05,
   onSpeechRecognized,
   onWakeWord,
-  onStateChange
+  onStateChange,
+  onSpeechProgress
 }: UseVoiceEngineProps) {
+  const onSpeechProgressRef = useRef(onSpeechProgress);
+  onSpeechProgressRef.current = onSpeechProgress;
+  const speechProgressTimerRef = useRef<any>(null);
+
   const [isMicActive, setIsMicActive] = useState(false);
   const [micPermissionDenied, setMicPermissionDenied] = useState(false);
   const [assistantState, setAssistantState] = useState<AssistantState>('IDLE');
@@ -681,8 +687,16 @@ export function useVoiceEngine({
   };
 
   // Browser Speech Synthesis (Option 1)
-  const speakBrowser = (textToSpeak: string, onEnd?: () => void, keepListeningAfter: boolean = false) => {
+  const speakBrowser = (
+    textToSpeak: string,
+    onEnd?: () => void,
+    keepListeningAfter: boolean = false,
+    onProgress?: (textSpokenSoFar: string, isFinished: boolean) => void,
+    originalRawText?: string
+  ) => {
     if (!('speechSynthesis' in window)) {
+      onProgress?.(originalRawText || textToSpeak, true);
+      onSpeechProgressRef.current?.(originalRawText || textToSpeak, true);
       updateState(keepListeningAfter ? 'LISTENING' : 'IDLE');
       return;
     }
@@ -703,13 +717,34 @@ export function useVoiceEngine({
     utterance.rate = voiceRate;
     utterance.volume = 1.0;
 
+    const targetText = originalRawText || textToSpeak;
+
+    utterance.onboundary = (event) => {
+      if (typeof event.charIndex === 'number') {
+        const idx = event.charIndex;
+        const nextSpace = targetText.indexOf(' ', idx);
+        const endPos = nextSpace === -1 ? targetText.length : nextSpace;
+        const partial = targetText.slice(0, endPos);
+        onProgress?.(partial, false);
+        onSpeechProgressRef.current?.(partial, false);
+      }
+    };
+
     utterance.onstart = () => {
       isSpeakingRef.current = true;
       currentSpeakingTextRef.current = textToSpeak;
       updateState('SPEAKING');
+
+      // Unveil first word immediately on speech start
+      const firstSpace = targetText.indexOf(' ');
+      const firstWord = firstSpace === -1 ? targetText : targetText.slice(0, firstSpace);
+      onProgress?.(firstWord, false);
+      onSpeechProgressRef.current?.(firstWord, false);
     };
 
     utterance.onend = () => {
+      onProgress?.(targetText, true);
+      onSpeechProgressRef.current?.(targetText, true);
       isSpeakingRef.current = false;
       currentSpeakingTextRef.current = '';
       lastSpeechEndTimeRef.current = Date.now();
@@ -725,6 +760,8 @@ export function useVoiceEngine({
 
     utterance.onerror = (e) => {
       console.warn("SpeechSynthesis error:", e);
+      onProgress?.(targetText, true);
+      onSpeechProgressRef.current?.(targetText, true);
       isSpeakingRef.current = false;
       currentSpeakingTextRef.current = '';
       lastSpeechEndTimeRef.current = Date.now();
@@ -743,15 +780,33 @@ export function useVoiceEngine({
   };
 
   // Unified Speech method: Option 2 (Local Neural) -> Option 3 (Fish Audio) -> Option 1 (Browser Fallback)
-  const speak = async (rawText: string, onEnd?: () => void, keepListeningAfter: boolean = false) => {
+  const speak = async (
+    rawText: string,
+    onEnd?: () => void,
+    keepListeningAfter: boolean = false,
+    onProgress?: (textSpokenSoFar: string, isFinished: boolean) => void
+  ) => {
     const textToSpeak = cleanSpeechText(rawText);
     if (!textToSpeak) {
+      onProgress?.(rawText, true);
+      onSpeechProgressRef.current?.(rawText, true);
       updateState(keepListeningAfter ? 'LISTENING' : 'IDLE');
       return;
     }
 
     stopSpeaking();
     unlockAudioHardware();
+
+    const words = rawText.split(/(\s+)/);
+    const totalTokens = words.length;
+
+    // Helper to clear ticker
+    const clearSubtitleTicker = () => {
+      if (speechProgressTimerRef.current) {
+        clearInterval(speechProgressTimerRef.current);
+        speechProgressTimerRef.current = null;
+      }
+    };
 
     // 1. Try Local Neural TTS (Option 2 - Studio British JARVIS voice - en-GB-RyanNeural)
     if (voiceProvider === 'local_neural') {
@@ -778,13 +833,41 @@ export function useVoiceEngine({
         player.src = audioUrl;
         player.volume = 1.0;
 
+        const updateAudioSubtitle = () => {
+          if (player.paused || player.ended || !isSpeakingRef.current) {
+            clearSubtitleTicker();
+            return;
+          }
+          const dur = player.duration;
+          if (dur && dur > 0) {
+            const cur = player.currentTime;
+            const ratio = Math.min(1.0, Math.max(0, cur / dur));
+            // Progressive word index synced to audio elapsed time
+            const tokensToShow = Math.min(totalTokens, Math.max(1, Math.round(ratio * totalTokens * 1.03)));
+            const currentText = words.slice(0, tokensToShow).join('');
+            onProgress?.(currentText, false);
+            onSpeechProgressRef.current?.(currentText, false);
+          }
+        };
+
         player.onplay = () => {
           isSpeakingRef.current = true;
           currentSpeakingTextRef.current = textToSpeak;
           updateState('SPEAKING');
+
+          // Immediately unveil initial word
+          const initText = words.slice(0, Math.min(2, totalTokens)).join('');
+          onProgress?.(initText, false);
+          onSpeechProgressRef.current?.(initText, false);
+
+          clearSubtitleTicker();
+          speechProgressTimerRef.current = setInterval(updateAudioSubtitle, 35);
         };
 
         player.onended = () => {
+          clearSubtitleTicker();
+          onProgress?.(rawText, true);
+          onSpeechProgressRef.current?.(rawText, true);
           isSpeakingRef.current = false;
           currentSpeakingTextRef.current = '';
           lastSpeechEndTimeRef.current = Date.now();
@@ -799,10 +882,11 @@ export function useVoiceEngine({
         };
 
         player.onerror = () => {
+          clearSubtitleTicker();
           isSpeakingRef.current = false;
           currentSpeakingTextRef.current = '';
           lastSpeechEndTimeRef.current = Date.now();
-          speakBrowser(textToSpeak, onEnd, keepListeningAfter);
+          speakBrowser(textToSpeak, onEnd, keepListeningAfter, onProgress, rawText);
         };
 
         try {
@@ -810,12 +894,12 @@ export function useVoiceEngine({
           return;
         } catch (playErr) {
           console.warn("HTML5 audio playback blocked by browser, attempting speech synthesis fallback:", playErr);
-          speakBrowser(textToSpeak, onEnd, keepListeningAfter);
+          speakBrowser(textToSpeak, onEnd, keepListeningAfter, onProgress, rawText);
           return;
         }
       } catch (err) {
         console.warn("Local neural TTS fallback to browser voice:", err);
-        speakBrowser(textToSpeak, onEnd, keepListeningAfter);
+        speakBrowser(textToSpeak, onEnd, keepListeningAfter, onProgress, rawText);
         return;
       }
     }
@@ -844,13 +928,39 @@ export function useVoiceEngine({
         const player = getSpeechAudioPlayer();
         player.src = audioUrl;
 
+        const updateFishSubtitle = () => {
+          if (player.paused || player.ended || !isSpeakingRef.current) {
+            clearSubtitleTicker();
+            return;
+          }
+          const dur = player.duration;
+          if (dur && dur > 0) {
+            const cur = player.currentTime;
+            const ratio = Math.min(1.0, Math.max(0, cur / dur));
+            const tokensToShow = Math.min(totalTokens, Math.max(1, Math.round(ratio * totalTokens * 1.03)));
+            const currentText = words.slice(0, tokensToShow).join('');
+            onProgress?.(currentText, false);
+            onSpeechProgressRef.current?.(currentText, false);
+          }
+        };
+
         player.onplay = () => {
           isSpeakingRef.current = true;
           currentSpeakingTextRef.current = textToSpeak;
           updateState('SPEAKING');
+
+          const initText = words.slice(0, Math.min(2, totalTokens)).join('');
+          onProgress?.(initText, false);
+          onSpeechProgressRef.current?.(initText, false);
+
+          clearSubtitleTicker();
+          speechProgressTimerRef.current = setInterval(updateFishSubtitle, 35);
         };
 
         player.onended = () => {
+          clearSubtitleTicker();
+          onProgress?.(rawText, true);
+          onSpeechProgressRef.current?.(rawText, true);
           isSpeakingRef.current = false;
           currentSpeakingTextRef.current = '';
           lastSpeechEndTimeRef.current = Date.now();
@@ -865,10 +975,11 @@ export function useVoiceEngine({
         };
 
         player.onerror = () => {
+          clearSubtitleTicker();
           isSpeakingRef.current = false;
           currentSpeakingTextRef.current = '';
           lastSpeechEndTimeRef.current = Date.now();
-          speakBrowser(textToSpeak, onEnd, keepListeningAfter);
+          speakBrowser(textToSpeak, onEnd, keepListeningAfter, onProgress, rawText);
         };
 
         await player.play();
@@ -879,10 +990,14 @@ export function useVoiceEngine({
     }
 
     // 3. Default British speech synthesis fallback (Option 1 - Serverless)
-    speakBrowser(textToSpeak, onEnd, keepListeningAfter);
+    speakBrowser(textToSpeak, onEnd, keepListeningAfter, onProgress, rawText);
   };
 
   const stopSpeaking = (interruptedByUser: boolean = false) => {
+    if (speechProgressTimerRef.current) {
+      clearInterval(speechProgressTimerRef.current);
+      speechProgressTimerRef.current = null;
+    }
     const player = document.getElementById('jarvis-speech-player') as HTMLAudioElement;
     if (player) {
       player.pause();
