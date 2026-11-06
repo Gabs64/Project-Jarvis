@@ -65,6 +65,7 @@ export default function App() {
   const startListeningRef = useRef<(() => void) | null>(null);
   const isMicActiveStateRef = useRef<boolean>(false);
   const activeStreamerTimerRef = useRef<any>(null);
+  const fallbackTimerRef = useRef<any>(null);
 
   const wakeWord = import.meta.env.VITE_WAKE_WORD || 'jarvis';
   const wakeWordEnabled = import.meta.env.VITE_WAKE_WORD_ENABLED
@@ -107,6 +108,10 @@ export default function App() {
 
   const speakWithSubtitles = useCallback(
     (id: string, text: string, onDone?: () => void) => {
+      if (fallbackTimerRef.current) {
+        clearTimeout(fallbackTimerRef.current);
+        fallbackTimerRef.current = null;
+      }
       if (activeStreamerTimerRef.current) {
         clearInterval(activeStreamerTimerRef.current);
         activeStreamerTimerRef.current = null;
@@ -116,8 +121,8 @@ export default function App() {
       const words = text.split(/(\s+)/);
       let fallbackTokenIdx = 0;
 
-      // Typewriter fallback in case audio is blocked or loading
-      const fallbackTimer = setTimeout(() => {
+      // Safe fallback: ONLY if voice audio is blocked or fails to start after 6.5s
+      fallbackTimerRef.current = setTimeout(() => {
         if (!receivedAudioProgress) {
           activeStreamerTimerRef.current = setInterval(() => {
             fallbackTokenIdx += 2;
@@ -132,12 +137,15 @@ export default function App() {
             }
           }, 45);
         }
-      }, 550);
+      }, 6500);
 
       speakRef.current?.(
         text,
         () => {
-          clearTimeout(fallbackTimer);
+          if (fallbackTimerRef.current) {
+            clearTimeout(fallbackTimerRef.current);
+            fallbackTimerRef.current = null;
+          }
           if (activeStreamerTimerRef.current) {
             clearInterval(activeStreamerTimerRef.current);
             activeStreamerTimerRef.current = null;
@@ -148,7 +156,10 @@ export default function App() {
         false,
         (textSpokenSoFar, isDone) => {
           receivedAudioProgress = true;
-          clearTimeout(fallbackTimer);
+          if (fallbackTimerRef.current) {
+            clearTimeout(fallbackTimerRef.current);
+            fallbackTimerRef.current = null;
+          }
           if (activeStreamerTimerRef.current) {
             clearInterval(activeStreamerTimerRef.current);
             activeStreamerTimerRef.current = null;
@@ -189,6 +200,10 @@ export default function App() {
       if (!v) return;
 
       stopSpeakingRef.current?.(true);
+      if (fallbackTimerRef.current) {
+        clearTimeout(fallbackTimerRef.current);
+        fallbackTimerRef.current = null;
+      }
       if (activeStreamerTimerRef.current) {
         clearInterval(activeStreamerTimerRef.current);
         activeStreamerTimerRef.current = null;
@@ -586,6 +601,14 @@ export default function App() {
         inputRef.current?.focus();
       } else if (e.key === 'Escape') {
         stopSpeakingRef.current?.(true);
+        if (fallbackTimerRef.current) {
+          clearTimeout(fallbackTimerRef.current);
+          fallbackTimerRef.current = null;
+        }
+        if (activeStreamerTimerRef.current) {
+          clearInterval(activeStreamerTimerRef.current);
+          activeStreamerTimerRef.current = null;
+        }
       }
     };
     window.addEventListener('keydown', onKeyDown);

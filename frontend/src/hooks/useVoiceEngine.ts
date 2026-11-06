@@ -572,8 +572,11 @@ export function useVoiceEngine({
               lastCommittedTimeRef.current = tNow;
               playAudioChime('wake');
               setInterimTranscript('Jarvis (Listening...)');
-              onWakeWordRef.current?.();
-              speak("Yes, sir? How may I assist you?", undefined, true);
+              if (onWakeWordRef.current) {
+                onWakeWordRef.current();
+              } else {
+                speak("Yes, sir? How may I assist you?", undefined, true);
+              }
               updateState('LISTENING');
               scheduleListeningTimeout(15);
             }
@@ -760,8 +763,10 @@ export function useVoiceEngine({
 
     utterance.onerror = (e) => {
       console.warn("SpeechSynthesis error:", e);
-      onProgress?.(targetText, true);
-      onSpeechProgressRef.current?.(targetText, true);
+      if (e.error !== 'interrupted' && e.error !== 'canceled') {
+        onProgress?.(targetText, true);
+        onSpeechProgressRef.current?.(targetText, true);
+      }
       isSpeakingRef.current = false;
       currentSpeakingTextRef.current = '';
       lastSpeechEndTimeRef.current = Date.now();
