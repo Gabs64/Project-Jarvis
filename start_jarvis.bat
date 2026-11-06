@@ -81,7 +81,7 @@ for /f "tokens=5" %%a in ('netstat -aon 2^>nul ^| findstr ":5173"') do if not "%
 
 :: 5. Launch Backend (FastAPI)
 echo [1/3] Launching JARVIS Neural Core Backend (Port 8000)...
-start "JARVIS_CORE" /min cmd /c "cd /d "%ROOT_DIR%backend" && "%PYTHON_EXE%" -m uvicorn main:app --host 127.0.0.1 --port 8000 > "%ROOT_DIR%backend\backend.log" 2>&1"
+start "JARVIS_CORE" /min cmd /c "cd /d "%ROOT_DIR%backend" && "%PYTHON_EXE%" -m uvicorn main:app --host 127.0.0.1 --port 8000 --reload > "%ROOT_DIR%backend\backend.log" 2>&1"
 
 :: 6. Launch Frontend (Vite React)
 echo [2/3] Launching Holographic Reactor Frontend (Port 5173)...
