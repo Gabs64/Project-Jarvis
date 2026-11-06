@@ -22,7 +22,23 @@ export default defineConfig(({ mode }) => {
         },
         '/ws': {
           target: wsTarget,
-          ws: true
+          ws: true,
+          configure: (proxy) => {
+            proxy.on('error', (err: any) => {
+              if (['ECONNABORTED', 'ECONNRESET', 'EPIPE'].includes(err?.code)) {
+                return;
+              }
+              console.warn('[vite proxy error]', err?.message || err);
+            });
+            proxy.on('proxyReqWs', (_proxyReq: any, _req: any, socket: any) => {
+              socket.on('error', (err: any) => {
+                if (['ECONNABORTED', 'ECONNRESET', 'EPIPE'].includes(err?.code)) {
+                  return;
+                }
+                console.warn('[vite ws socket error]', err?.message || err);
+              });
+            });
+          }
         }
       }
     }

@@ -365,8 +365,10 @@ export default function App() {
     let reconnectTimeout: any;
 
     const connectWs = () => {
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const wsUrl = `${protocol}//${window.location.host}/ws/jarvis`;
+      const defaultWsBase = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}`;
+      const configuredWsBase = import.meta.env.VITE_WS_URL;
+      const wsBase = configuredWsBase && configuredWsBase.trim() !== '' ? configuredWsBase : defaultWsBase;
+      const wsUrl = `${wsBase.replace(/\/+$/, '')}/ws/jarvis`;
       try {
         ws = new WebSocket(wsUrl);
         ws.onopen = () => {
