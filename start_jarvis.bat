@@ -93,12 +93,17 @@ set /a WAIT_COUNT=0
 
 :WAIT_LOOP
 set /a WAIT_COUNT+=1
-ping 127.0.0.1 -n 3 >nul
-netstat -ano 2>nul | findstr ":8000" | findstr "LISTENING" >nul 2>nul
+ping 127.0.0.1 -n 2 >nul
+
+:: Check backend readiness via HTTP health endpoint
+curl.exe -f -s -o nul http://127.0.0.1:8000/health >nul 2>nul
 if %errorlevel% neq 0 (
-    if %WAIT_COUNT% geq 10 (
+    "%PYTHON_EXE%" -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=1)" >nul 2>nul
+)
+if %errorlevel% neq 0 (
+    if %WAIT_COUNT% geq 20 (
         echo.
-        echo [ERROR] Neural Core backend failed to bind to port 8000.
+        echo [ERROR] Neural Core backend failed to respond on http://127.0.0.1:8000.
         if exist "%ROOT_DIR%backend\backend.log" (
             echo ==================== BACKEND LOG ====================
             type "%ROOT_DIR%backend\backend.log"
@@ -110,11 +115,16 @@ if %errorlevel% neq 0 (
     echo       ...waiting for Neural Core backend ^(port 8000^) to initialize...
     goto WAIT_LOOP
 )
-netstat -ano 2>nul | findstr ":5173" | findstr "LISTENING" >nul 2>nul
+
+:: Check frontend readiness
+curl.exe -f -s -o nul http://localhost:5173 >nul 2>nul
 if %errorlevel% neq 0 (
-    if %WAIT_COUNT% geq 15 (
+    "%PYTHON_EXE%" -c "import urllib.request; urllib.request.urlopen('http://localhost:5173', timeout=1)" >nul 2>nul
+)
+if %errorlevel% neq 0 (
+    if %WAIT_COUNT% geq 25 (
         echo.
-        echo [ERROR] Frontend UI failed to bind to port 5173.
+        echo [ERROR] Frontend UI failed to respond on http://localhost:5173.
         pause
         exit /b 1
     )
