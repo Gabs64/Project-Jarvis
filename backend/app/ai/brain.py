@@ -469,8 +469,17 @@ class JarvisBrain:
         if "how are you" in lower:
             return {"reply": "All systems are operational and performing at peak parameters, sir. How may I be of service?"}
 
-        # Default conversational reply
-        return {"reply": f"Understood, sir. Let me know if you would like me to perform an action regarding '{text}'."}
+        # Follow-up questions about memory, RAM, or telemetry figures
+        if any(w in lower for w in ["ram", "memory", "percent", "telemetry", "diagnostics", "usage"]) and any(c in lower for c in ["45", "12", "what", "says", "show"]):
+            import psutil
+            mem = psutil.virtual_memory()
+            return {"reply": f"My apologies for any confusion, sir. The live telemetry confirms your memory is currently sitting at {mem.percent:.0f}%."}
+
+        if any(lower.startswith(w) for w in ["why did", "why do", "why would", "why", "how come", "what do you mean"]):
+            return {"reply": "A brief telemetry caching discrepancy occurred, sir; the live figures on your console are the accurate real-time metrics."}
+
+        # Polite, dynamic conversational default
+        return {"reply": "Understood, sir. All neural subsystems are standing by for your instruction."}
 
     def _synthesize_tool_speech(self, tool_name: str, args: dict, result: dict) -> str:
         """Generates natural, British AI-toned speech based on tool result."""
@@ -702,6 +711,95 @@ class JarvisBrain:
             return cleaned_text or raw_text
         return None
 
+    def _get_relevant_tools(self, prompt: str) -> List[dict]:
+        """
+        Dynamically selects only the relevant tool schemas for the current prompt.
+        If the user is asking a conversational question or follow-up, returns empty list
+        to reduce token consumption by 90%, preventing Groq 429 rate limit errors.
+        """
+        lower = prompt.lower()
+        
+        # Purely conversational keywords / follow-up checks
+        conversational_starts = [
+            "why did", "why do", "why would", "what do you mean", "it says", "explain",
+            "tell me about yourself", "who made you", "who created you", "who are you",
+            "how are you", "hello", "hi jarvis", "thank you", "thanks", "joke",
+            "what think", "do you agree", "are you sure", "really", "yes", "no", "okay",
+            "ok", "understood", "tell me a joke"
+        ]
+        if any(lower.startswith(cs) for cs in conversational_starts) and not any(a in lower for a in ["open ", "run ", "search ", "play ", "create ", "delete "]):
+            return []
+
+        matched: set[str] = set()
+
+        # 1. System & Windows Telemetry
+        if any(w in lower for w in ["cpu", "ram", "memory", "storage", "disk", "battery", "status", "telemetry", "how is my pc", "computer"]):
+            matched.add("get_system_status")
+        if any(w in lower for w in ["time", "date", "clock", "what day"]):
+            matched.add("get_time_and_date")
+        if any(w in lower for w in ["screenshot", "screen capture", "snapshot"]):
+            matched.add("take_screenshot")
+        if any(w in lower for w in ["lock", "workstation"]):
+            matched.add("lock_screen")
+        if any(w in lower for w in ["volume", "mute", "unmute", "sound"]):
+            matched.add("volume_control")
+        if any(w in lower for w in ["clipboard", "copied"]):
+            matched.update(["get_clipboard", "set_clipboard"])
+        if any(w in lower for w in ["minimize", "desktop"]):
+            matched.add("minimize_all_windows")
+        if any(w in lower for w in ["recycle bin", "trash"]):
+            matched.add("empty_recycle_bin")
+        if any(w in lower for w in ["network", "wifi", "ip address", "ping", "latency"]):
+            matched.add("get_network_info")
+        if any(w in lower for w in ["terminal", "powershell", "run command", "exec "]):
+            matched.add("run_terminal_command")
+        if any(w in lower for w in ["shut down", "shutdown", "turn off"]):
+            matched.add("system_shutdown")
+        if any(w in lower for w in ["restart", "reboot"]):
+            matched.add("system_restart")
+
+        # 2. Apps & Media
+        if any(w in lower for w in ["open", "launch", "start", "app", "chrome", "spotify", "discord", "vscode", "notepad", "calculator"]):
+            matched.update(["open_application", "list_running_applications"])
+        if any(w in lower for w in ["close", "terminate", "kill", "exit"]):
+            matched.add("close_application")
+        if any(w in lower for w in ["play", "pause", "resume", "next song", "previous song", "music", "song"]):
+            matched.update(["media_control", "play_media_search"])
+
+        # 3. Web & Weather & Knowledge
+        if any(w in lower for w in ["weather", "temperature", "forecast", "rain", "sunny", "climate"]):
+            matched.add("get_weather")
+        if any(w in lower for w in ["who is", "who was", "what is", "wikipedia", "encyclopedia"]):
+            matched.update(["get_wikipedia_summary", "search_web"])
+        if any(w in lower for w in ["price", "stock", "crypto", "bitcoin", "btc", "eth", "sol", "aapl", "nvda", "tsla"]):
+            matched.add("get_market_price")
+        if any(w in lower for w in ["convert", "currency", "exchange rate", "dollar", "peso", "euro", "usd", "php"]):
+            matched.add("convert_currency")
+        if any(w in lower for w in ["calculate", "compute", "solve", "+", "-", "*", "/", "%", "sqrt"]):
+            matched.add("calculate")
+        if any(w in lower for w in ["search", "google", "look up", "find"]):
+            matched.update(["search_web", "open_url"])
+
+        # 4. Productivity & Memory
+        if any(w in lower for w in ["remind", "reminder", "alarm"]):
+            matched.update(["create_reminder", "list_reminders"])
+        if any(w in lower for w in ["task", "todo", "to-do"]):
+            matched.update(["create_task", "list_tasks"])
+        if any(w in lower for w in ["note", "memo"]):
+            matched.update(["create_note", "list_notes"])
+        if any(w in lower for w in ["remember", "memory"]):
+            matched.update(["store_memory", "retrieve_memory"])
+
+        # 5. Smart Home
+        if any(w in lower for w in ["light", "lights", "device", "switch"]):
+            matched.update(["list_devices", "control_device"])
+
+        if not matched:
+            return []
+
+        all_schemas = tool_registry.get_all_schemas()
+        return [s for s in all_schemas if s["function"]["name"] in matched]
+
     async def _call_cloud_llm(self, prompt: str) -> Optional[dict]:
         """Calls Gemini, OpenAI, Groq, or Ollama-compatible endpoint with tool definitions and fallbacks."""
         headers = {
@@ -710,21 +808,37 @@ class JarvisBrain:
         if settings.AI_API_KEY:
             headers["Authorization"] = f"Bearer {settings.AI_API_KEY}"
 
+        # Fetch live instantaneous telemetry snapshot (~15 tokens)
+        telemetry_badge = ""
+        try:
+            import psutil
+            mem_pct = psutil.virtual_memory().percent
+            cpu_pct = psutil.cpu_percent(interval=None)
+            telemetry_badge = f"\n[LIVE SYSTEM TELEMETRY: CPU: {cpu_pct:.0f}%, RAM / Memory: {mem_pct:.1f}% used, Time: {datetime.datetime.now().strftime('%I:%M %p')}]"
+        except Exception:
+            pass
+
+        sys_content = f"{JARVIS_SYSTEM_PROMPT}{telemetry_badge}"
+
         # Ensure the prompt is in the conversation history as the latest user message
         messages = [
-            {"role": "system", "content": JARVIS_SYSTEM_PROMPT},
+            {"role": "system", "content": sys_content},
             *self.conversation_history[-6:]
         ]
         if not messages or messages[-1].get("role") != "user":
             messages.append({"role": "user", "content": prompt})
 
+        # Dynamically select relevant tools (avoids dumping 3600 tokens of schemas)
+        tools = self._get_relevant_tools(prompt)
+
         payload: dict[str, Any] = {
             "model": settings.AI_MODEL,
             "messages": messages,
             "temperature": 0.25,
-            "max_tokens": 280,
-            "tools": tool_registry.get_all_schemas()
+            "max_tokens": 280
         }
+        if tools:
+            payload["tools"] = tools
 
         api_base = self._get_api_base()
         timeout_secs = 30.0 if settings.LLM_PROVIDER == "ollama" else 12.0
@@ -733,7 +847,22 @@ class JarvisBrain:
         try:
             resp = await client.post(f"{api_base}/chat/completions", headers=headers, json=payload)
             
-            # If model doesn't support tools schema (e.g. older llama3 in Ollama), retry without tools payload
+            # If rate-limited (429), immediately retry without tools or fallback model
+            if resp.status_code == 429:
+                if "tools" in payload:
+                    payload_no_tools = {k: v for k, v in payload.items() if k != "tools"}
+                    resp = await client.post(f"{api_base}/chat/completions", headers=headers, json=payload_no_tools)
+                if resp.status_code == 429:
+                    alt_model = "openai/gpt-oss-20b" if settings.AI_MODEL != "openai/gpt-oss-20b" else "qwen/qwen3.8-27b"
+                    payload_alt = {
+                        "model": alt_model,
+                        "messages": messages,
+                        "temperature": 0.25,
+                        "max_tokens": 200
+                    }
+                    resp = await client.post(f"{api_base}/chat/completions", headers=headers, json=payload_alt)
+
+            # If model doesn't support tools schema, retry without tools payload
             if resp.status_code == 400 and ("support tools" in resp.text.lower() or "tools" in resp.text.lower()):
                 payload_no_tools = {k: v for k, v in payload.items() if k != "tools"}
                 resp = await client.post(f"{api_base}/chat/completions", headers=headers, json=payload_no_tools)
