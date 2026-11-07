@@ -182,7 +182,14 @@ export function useVoiceEngine({
 
   // Voice Provider state
   const [voiceProvider, setVoiceProviderState] = useState<VoiceProvider>(() => {
-    return (localStorage.getItem('jarvis_voice_provider') as VoiceProvider) || (import.meta.env.VITE_VOICE_PROVIDER as VoiceProvider) || 'local_neural';
+    const saved = localStorage.getItem('jarvis_voice_provider') as VoiceProvider;
+    if (saved === 'fish_audio') return 'fish_audio';
+    // If previously saved as 'browser' or unset, auto-migrate to 'local_neural' to restore authentic JARVIS voice
+    if (!saved || saved === 'browser') {
+      localStorage.setItem('jarvis_voice_provider', 'local_neural');
+      return 'local_neural';
+    }
+    return saved;
   });
   const [localNeuralVoice, setLocalNeuralVoice] = useState<string>(() => {
     return localStorage.getItem('jarvis_local_neural_voice') || import.meta.env.VITE_LOCAL_NEURAL_VOICE || 'en-GB-RyanNeural';
@@ -817,9 +824,25 @@ export function useVoiceEngine({
     if (voiceProvider === 'local_neural') {
       try {
         updateState('THINKING');
-        const streamUrl = `/api/voice/stream-tts?text=${encodeURIComponent(textToSpeak)}&voice=${encodeURIComponent(localNeuralVoice)}&t=${Date.now()}`;
+        const res = await fetch('/api/voice/local-tts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            text: textToSpeak,
+            voice: localNeuralVoice || 'en-GB-RyanNeural',
+            rate: '+5%',
+            pitch: '-4Hz'
+          })
+        });
+
+        if (!res.ok) {
+          throw new Error(`Local TTS HTTP ${res.status}`);
+        }
+
+        const blob = await res.blob();
+        const audioUrl = URL.createObjectURL(blob);
         const player = getSpeechAudioPlayer();
-        player.src = streamUrl;
+        player.src = audioUrl;
         player.volume = 1.0;
 
         const updateAudioSubtitle = () => {
@@ -829,14 +852,14 @@ export function useVoiceEngine({
           }
           const cur = player.currentTime;
           const dur = player.duration;
-          // When streaming, dur might be Infinity or NaN until metadata arrives
-          const effectiveDur = isFinite(dur) && dur > 0 ? dur : Math.max(1.2, totalTokens * 0.17);
-          const ratio = Math.min(1.0, Math.max(0, cur / effectiveDur));
-          // Progressive word index synced to audio elapsed time
-          const tokensToShow = Math.min(totalTokens, Math.max(1, Math.round(ratio * totalTokens * 1.02)));
-          const currentText = words.slice(0, tokensToShow).join('');
-          onProgress?.(currentText, false);
-          onSpeechProgressRef.current?.(currentText, false);
+          if (dur && isFinite(dur) && dur > 0) {
+            const ratio = Math.min(1.0, Math.max(0, cur / dur));
+            // Progressive word index synced to audio elapsed time
+            const tokensToShow = Math.min(totalTokens, Math.max(1, Math.round(ratio * totalTokens * 1.02)));
+            const currentText = words.slice(0, tokensToShow).join('');
+            onProgress?.(currentText, false);
+            onSpeechProgressRef.current?.(currentText, false);
+          }
         };
 
         player.onplay = () => {
@@ -860,6 +883,7 @@ export function useVoiceEngine({
           isSpeakingRef.current = false;
           currentSpeakingTextRef.current = '';
           lastSpeechEndTimeRef.current = Date.now();
+          URL.revokeObjectURL(audioUrl);
           if (keepListeningAfter) {
             updateState('LISTENING');
             scheduleListeningTimeout(10);
@@ -869,11 +893,13 @@ export function useVoiceEngine({
           onEnd?.();
         };
 
-        player.onerror = () => {
+        player.onerror = (e) => {
+          console.warn("Local neural audio playback error:", e);
           clearSubtitleTicker();
           isSpeakingRef.current = false;
           currentSpeakingTextRef.current = '';
           lastSpeechEndTimeRef.current = Date.now();
+          URL.revokeObjectURL(audioUrl);
           speakBrowser(textToSpeak, onEnd, keepListeningAfter, onProgress, rawText);
         };
 

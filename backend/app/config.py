@@ -37,7 +37,8 @@ class Settings(BaseModel):
     FISH_AUDIO_API_KEY: str = os.getenv("FISH_AUDIO_API_KEY", "")
     FISH_AUDIO_MODEL: str = os.getenv("FISH_AUDIO_MODEL", "s2.1-pro-free")
     FISH_AUDIO_VOICE_ID: str = os.getenv("FISH_AUDIO_VOICE_ID", "9a9cf47702da476aa4629e2506d4a857")
-    VOICE_PROVIDER: str = os.getenv("VOICE_PROVIDER", "browser") # fish_audio or browser
+    # Voice synthesis engine
+    VOICE_PROVIDER: str = os.getenv("VOICE_PROVIDER", "local_neural") # local_neural, fish_audio or browser
     
     # Smart Home / Home Assistant
     HOME_ASSISTANT_URL: str = os.getenv("HOME_ASSISTANT_URL", "http://homeassistant.local:8123")
