@@ -1,6 +1,7 @@
 import time
 import json
 import inspect
+import asyncio
 from typing import Dict, Any, Callable, List, Optional
 from app.security.permissions import get_tool_risk, requires_confirmation, format_confirmation_prompt
 from app.database.session import async_session_factory
@@ -19,7 +20,7 @@ from app.tools.file_tools import (
     create_folder, delete_file, delete_folder
 )
 from app.tools.web_tools import (
-    search_web, open_url
+    search_web, open_url, get_weather
 )
 from app.tools.memory_tools import (
     store_memory, retrieve_memory, forget_memory
@@ -361,6 +362,21 @@ class ToolRegistry:
                     "url": {"type": "string", "description": "URL link to open."}
                 },
                 "required": ["url"]
+            }
+        )
+        self.register(
+            "get_weather",
+            "Retrieves live, real-time meteorological conditions, temperature, humidity, and forecast for any city or country.",
+            get_weather,
+            {
+                "type": "object",
+                "properties": {
+                    "location": {
+                        "type": "string",
+                        "description": "City or country name (e.g. 'Philippines', 'Manila', 'Tokyo', 'London', 'New York')."
+                    }
+                },
+                "required": ["location"]
             }
         )
 

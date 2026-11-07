@@ -353,6 +353,25 @@ class JarvisBrain:
                 }
             }
 
+        # Weather queries: "What's the weather in the Philippines", "Weather in Manila"
+        if any(w in lower for w in ["weather", "temperature", "forecast", "climate"]):
+            loc = "Philippines" if "philippines" in lower else "Manila" if "manila" in lower else "auto"
+            words = text.split()
+            if "in" in words:
+                idx = words.index("in")
+                if idx + 1 < len(words):
+                    loc = " ".join(words[idx + 1:]).replace("?", "").strip()
+            elif "for" in words:
+                idx = words.index("for")
+                if idx + 1 < len(words):
+                    loc = " ".join(words[idx + 1:]).replace("?", "").strip()
+            return {
+                "tool_call": {
+                    "name": "get_weather",
+                    "arguments": {"location": loc}
+                }
+            }
+
         # Smart home devices: Lights / Camera / Thermostat
         if "light" in lower or "lights" in lower:
             action = "off" if "off" in lower else "on"
@@ -425,6 +444,16 @@ class JarvisBrain:
             if first_summary:
                 return f"I've searched for {query}. Top result states: {first_summary[:160]}..."
             return f"I have queried the web for {query} and retrieved {count} results for your review."
+
+        if tool_name == "get_weather":
+            loc = args.get("location", "the area")
+            cond = res_data.get("condition", "Clear")
+            temp_c = res_data.get("temperature_c", "")
+            temp_f = res_data.get("temperature_f", "")
+            humidity = res_data.get("humidity", "")
+            if res_data.get("success"):
+                return f"In {loc.capitalize()}, it is currently {cond.lower()} with a temperature of {temp_c} ({temp_f}) and {humidity} humidity, sir."
+            return f"I wasn't able to pull live meteorological data for {loc}, sir."
 
         if tool_name == "create_folder":
             path = args.get("path", "")

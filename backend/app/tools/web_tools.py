@@ -121,3 +121,45 @@ def open_url(url: str) -> dict:
         return {"success": True, "url": url, "message": f"Opened '{url}' in browser."}
     except Exception as e:
         return {"success": False, "error": str(e)}
+
+def get_weather(location: str = "auto") -> dict:
+    """Retrieves real-time live weather conditions, temperature, humidity, and forecast for any city or country."""
+    clean_loc = (location or "auto").strip()
+    if clean_loc.lower() in ["philippines", "the philippines", "ph"]:
+        clean_loc = "Manila"
+
+    try:
+        encoded = clean_loc.replace(" ", "+")
+        resp = httpx.get(
+            f"https://wttr.in/{encoded}?format=j1",
+            timeout=5.0,
+            headers={"User-Agent": "curl/7.68.0"}
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            curr = data.get("current_condition", [{}])[0]
+            desc = curr.get("weatherDesc", [{}])[0].get("value", "Clear")
+            temp_c = curr.get("temp_C", "N/A")
+            temp_f = curr.get("temp_F", "N/A")
+            feels_c = curr.get("FeelsLikeC", temp_c)
+            humidity = curr.get("humidity", "N/A")
+            wind_kph = curr.get("windspeedKmph", "N/A")
+
+            return {
+                "success": True,
+                "location": location or clean_loc,
+                "condition": desc,
+                "temperature_c": f"{temp_c}°C",
+                "temperature_f": f"{temp_f}°F",
+                "feels_like_c": f"{feels_c}°C",
+                "humidity": f"{humidity}%",
+                "wind": f"{wind_kph} km/h"
+            }
+    except Exception as e:
+        pass
+
+    return {
+        "success": False,
+        "location": location,
+        "error": "Unable to contact live meteorological satellite at this moment."
+    }

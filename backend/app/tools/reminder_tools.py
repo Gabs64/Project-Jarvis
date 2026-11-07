@@ -92,28 +92,20 @@ async def _list_tasks_async(status: str = "todo") -> list:
             "status": t.status
         } for t in items]
 
-def create_reminder(title: str, time: str, description: str = "") -> dict:
+async def create_reminder(title: str, time: str, description: str = "") -> dict:
     """Schedules a new reminder at the specified time."""
-    import concurrent.futures
-    with concurrent.futures.ThreadPoolExecutor() as executor:
-        return executor.submit(lambda: asyncio.run(_create_reminder_async(title, time, description))).result()
+    return await _create_reminder_async(title, time, description)
 
-def list_reminders(status: str = "pending") -> dict:
+async def list_reminders(status: str = "pending") -> dict:
     """Lists scheduled reminders."""
-    import concurrent.futures
-    with concurrent.futures.ThreadPoolExecutor() as executor:
-        rems = executor.submit(lambda: asyncio.run(_list_reminders_async(status))).result()
+    rems = await _list_reminders_async(status)
     return {"reminders": rems, "count": len(rems)}
 
-def create_task(title: str, priority: str = "normal") -> dict:
+async def create_task(title: str, priority: str = "normal") -> dict:
     """Creates a to-do task item."""
-    import concurrent.futures
-    with concurrent.futures.ThreadPoolExecutor() as executor:
-        return executor.submit(lambda: asyncio.run(_create_task_async(title, priority))).result()
+    return await _create_task_async(title, priority)
 
-def list_tasks(status: str = "todo") -> dict:
+async def list_tasks(status: str = "todo") -> dict:
     """Lists current to-do tasks."""
-    import concurrent.futures
-    with concurrent.futures.ThreadPoolExecutor() as executor:
-        tasks = executor.submit(lambda: asyncio.run(_list_tasks_async(status))).result()
+    tasks = await _list_tasks_async(status)
     return {"tasks": tasks, "count": len(tasks)}
