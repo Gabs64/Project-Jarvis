@@ -32,14 +32,57 @@ class LocalNeuralVoiceService:
         )
         
         audio_stream = io.BytesIO()
-        async for chunk in communicate.stream():
-            if chunk["type"] == "audio":
-                audio_stream.write(chunk["data"])
+        try:
+            async for chunk in communicate.stream():
+                if chunk["type"] == "audio":
+                    audio_stream.write(chunk["data"])
+        except Exception as e:
+            print(f"[EDGE-TTS] Synthesis error: {e}")
+            raise
                 
         audio_bytes = audio_stream.getvalue()
-        if audio_bytes and len(cls._AUDIO_CACHE) < 128:
+        if audio_bytes and len(cls._AUDIO_CACHE) < 256:
             cls._AUDIO_CACHE[cache_key] = audio_bytes
         return audio_bytes
+
+    @classmethod
+    async def stream_chunks(
+        cls,
+        text: str,
+        voice: Optional[str] = None,
+        rate: str = "+5%",
+        pitch: str = "-4Hz"
+    ):
+        """
+        Yields audio chunks in real-time as they arrive from edge-tts,
+        allowing the browser to begin playback instantly within <1s
+        instead of waiting for the full audio file to download.
+        """
+        chosen_voice = voice or cls.DEFAULT_VOICE
+        cache_key = (text.strip(), chosen_voice, rate, pitch)
+        if cache_key in cls._AUDIO_CACHE:
+            yield cls._AUDIO_CACHE[cache_key]
+            return
+
+        communicate = edge_tts.Communicate(
+            text=text,
+            voice=chosen_voice,
+            rate=rate,
+            pitch=pitch
+        )
+        
+        collected = bytearray()
+        try:
+            async for chunk in communicate.stream():
+                if chunk["type"] == "audio":
+                    data = chunk["data"]
+                    collected.extend(data)
+                    yield data
+        except Exception as e:
+            print(f"[EDGE-TTS STREAM] Chunk error: {e}")
+            
+        if collected and len(cls._AUDIO_CACHE) < 256:
+            cls._AUDIO_CACHE[cache_key] = bytes(collected)
 
     @classmethod
     def get_available_voices(cls):

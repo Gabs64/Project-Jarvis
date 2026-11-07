@@ -1,6 +1,6 @@
 import os
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 from app.voice.fish_audio import FishAudioService
@@ -322,6 +322,35 @@ async def generate_local_tts(req: LocalTTSRequest):
             pitch=req.pitch or "-4Hz"
         )
         return Response(content=audio_bytes, media_type="audio/mpeg")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@api_router.get("/voice/stream-tts")
+async def stream_local_tts(
+    text: str = Query(...),
+    voice: Optional[str] = Query(None),
+    rate: str = Query("+5%"),
+    pitch: str = Query("-4Hz")
+):
+    """
+    Streams audio chunks directly to HTML5 Audio element in real-time,
+    providing ultra-low latency (<1s) for spoken responses of any length.
+    """
+    try:
+        generator = LocalNeuralVoiceService.stream_chunks(
+            text=text,
+            voice=voice,
+            rate=rate,
+            pitch=pitch
+        )
+        return StreamingResponse(
+            generator,
+            media_type="audio/mpeg",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no"
+            }
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

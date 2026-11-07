@@ -117,7 +117,7 @@ class ToolRegistry:
             if inspect.iscoroutinefunction(tool.func):
                 result_data = await tool.func(**valid_args)
             else:
-                result_data = tool.func(**valid_args)
+                result_data = await asyncio.to_thread(tool.func, **valid_args)
         except Exception as e:
             status = "ERROR"
             error_msg = str(e)

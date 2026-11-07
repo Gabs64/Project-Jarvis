@@ -464,8 +464,8 @@ export function useVoiceEngine({
         const hasInterruptWord = /\b(stop|quiet|cancel|wait|shut up|hush|silence|hold on|pause|jarvis)\b/i.test(heardLower);
         const hasDirectCmd = isDirectCommand(activeText) || containsWakeWord(heardLower, wakeWordRef.current);
 
-        // If user actively intervened (not speaker self-echo) OR uttered interrupt / command words:
-        if (!isEchoOfSelf || hasInterruptWord || hasDirectCmd) {
+        // ONLY halt if user uttered an explicit interrupt/command AND it is not self echo:
+        if (!isEchoOfSelf && (hasInterruptWord || hasDirectCmd)) {
           // Immediately halt Jarvis speaking!
           stopSpeaking(true);
           updateState('LISTENING');
@@ -817,25 +817,9 @@ export function useVoiceEngine({
     if (voiceProvider === 'local_neural') {
       try {
         updateState('THINKING');
-        const res = await fetch('/api/voice/local-tts', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            text: textToSpeak,
-            voice: localNeuralVoice,
-            rate: '+5%',
-            pitch: '-4Hz'
-          })
-        });
-
-        if (!res.ok) {
-          throw new Error(`Local TTS HTTP ${res.status}`);
-        }
-
-        const blob = await res.blob();
-        const audioUrl = URL.createObjectURL(blob);
+        const streamUrl = `/api/voice/stream-tts?text=${encodeURIComponent(textToSpeak)}&voice=${encodeURIComponent(localNeuralVoice)}&t=${Date.now()}`;
         const player = getSpeechAudioPlayer();
-        player.src = audioUrl;
+        player.src = streamUrl;
         player.volume = 1.0;
 
         const updateAudioSubtitle = () => {
@@ -843,16 +827,16 @@ export function useVoiceEngine({
             clearSubtitleTicker();
             return;
           }
+          const cur = player.currentTime;
           const dur = player.duration;
-          if (dur && dur > 0) {
-            const cur = player.currentTime;
-            const ratio = Math.min(1.0, Math.max(0, cur / dur));
-            // Progressive word index synced to audio elapsed time
-            const tokensToShow = Math.min(totalTokens, Math.max(1, Math.round(ratio * totalTokens * 1.03)));
-            const currentText = words.slice(0, tokensToShow).join('');
-            onProgress?.(currentText, false);
-            onSpeechProgressRef.current?.(currentText, false);
-          }
+          // When streaming, dur might be Infinity or NaN until metadata arrives
+          const effectiveDur = isFinite(dur) && dur > 0 ? dur : Math.max(1.2, totalTokens * 0.17);
+          const ratio = Math.min(1.0, Math.max(0, cur / effectiveDur));
+          // Progressive word index synced to audio elapsed time
+          const tokensToShow = Math.min(totalTokens, Math.max(1, Math.round(ratio * totalTokens * 1.02)));
+          const currentText = words.slice(0, tokensToShow).join('');
+          onProgress?.(currentText, false);
+          onSpeechProgressRef.current?.(currentText, false);
         };
 
         player.onplay = () => {
@@ -876,7 +860,6 @@ export function useVoiceEngine({
           isSpeakingRef.current = false;
           currentSpeakingTextRef.current = '';
           lastSpeechEndTimeRef.current = Date.now();
-          URL.revokeObjectURL(audioUrl);
           if (keepListeningAfter) {
             updateState('LISTENING');
             scheduleListeningTimeout(10);

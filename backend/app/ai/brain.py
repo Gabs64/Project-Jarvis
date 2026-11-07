@@ -491,17 +491,19 @@ class JarvisBrain:
             {
                 "role": "system",
                 "content": (
-                    "You are J.A.R.V.I.S., a sophisticated personal AI assistant. "
+                    "You are J.A.R.V.I.S., Tony Stark's sophisticated personal AI assistant. "
                     "You have just executed a system or web tool on behalf of the user. "
                     "Synthesize the provided tool data and answer the user's inquiry directly, clearly, "
-                    "and concisely in natural British English prose. Address the user politely as 'sir'. "
+                    "and concisely in conversational British English prose. Address the user politely as 'sir'. "
+                    "Keep your response short, punchy, and conversational: 1 to 2 concise sentences (at most 3 short sentences). "
+                    "Do NOT recite long essays, disclaimers, or pre-announcements like 'Searching for...'. "
                     "Do NOT call any further tools, and do NOT output any XML, JSON, or code tags."
                 )
             },
             {"role": "user", "content": user_prompt},
             {
                 "role": "user",
-                "content": f"[Tool '{tool_name}' executed with arguments {json.dumps(tool_args)}]\nTool Results:\n{content_str}\n\nPlease synthesize this data into your final verbal response to the user."
+                "content": f"[Tool '{tool_name}' executed with arguments {json.dumps(tool_args)}]\nTool Results:\n{content_str}\n\nDeliver the final concise verbal answer directly to the user."
             }
         ]
 
@@ -512,12 +514,12 @@ class JarvisBrain:
         payload = {
             "model": settings.AI_MODEL,
             "messages": messages,
-            "temperature": 0.3,
-            "max_tokens": 450
+            "temperature": 0.25,
+            "max_tokens": 180
         }
 
         api_base = self._get_api_base()
-        timeout_secs = 30.0 if settings.LLM_PROVIDER == "ollama" else 15.0
+        timeout_secs = 20.0 if settings.LLM_PROVIDER == "ollama" else 10.0
         client = self._get_http_client(timeout_secs)
 
         resp = await client.post(f"{api_base}/chat/completions", headers=headers, json=payload)
@@ -528,6 +530,8 @@ class JarvisBrain:
             cleaned_text = re.sub(r"<tool_call>.*?</tool_call>", "", raw_text, flags=re.DOTALL)
             cleaned_text = re.sub(r"<function=.*?</function>", "", cleaned_text, flags=re.DOTALL)
             cleaned_text = re.sub(r"<[^>]+>", "", cleaned_text).strip()
+            # Strip pre-search announcements like "Searching for..."
+            cleaned_text = re.sub(r'^(?:(?:To provide you with|In order to provide|I will perform|Searching for|Looking up)[^.]*?\.\.\.?\s*)+', '', cleaned_text, flags=re.IGNORECASE).strip()
             return cleaned_text or raw_text
         return None
 
@@ -550,13 +554,13 @@ class JarvisBrain:
         payload: dict[str, Any] = {
             "model": settings.AI_MODEL,
             "messages": messages,
-            "temperature": 0.35,
-            "max_tokens": 600,
+            "temperature": 0.25,
+            "max_tokens": 280,
             "tools": tool_registry.get_all_schemas()
         }
 
         api_base = self._get_api_base()
-        timeout_secs = 60.0 if settings.LLM_PROVIDER == "ollama" else 20.0
+        timeout_secs = 30.0 if settings.LLM_PROVIDER == "ollama" else 12.0
         client = self._get_http_client(timeout_secs)
 
         try:
