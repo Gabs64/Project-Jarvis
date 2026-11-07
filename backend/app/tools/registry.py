@@ -10,7 +10,9 @@ from app.database.models import ToolLog
 # Tool imports
 from app.tools.system_tools import (
     get_system_status, get_time_and_date, take_screenshot,
-    lock_screen, volume_control, system_power
+    lock_screen, volume_control, system_power,
+    get_clipboard, set_clipboard, minimize_all_windows,
+    empty_recycle_bin, get_network_info, run_terminal_command
 )
 from app.tools.app_tools import (
     open_application, close_application, list_running_applications, media_control
@@ -20,7 +22,9 @@ from app.tools.file_tools import (
     create_folder, delete_file, delete_folder
 )
 from app.tools.web_tools import (
-    search_web, open_url, get_weather
+    search_web, open_url, get_weather,
+    get_wikipedia_summary, get_market_price, convert_currency,
+    calculate, play_media_search, create_note, list_notes
 )
 from app.tools.memory_tools import (
     store_memory, retrieve_memory, forget_memory
@@ -219,6 +223,54 @@ class ToolRegistry:
             lambda: system_power("restart"),
             {"type": "object", "properties": {}, "required": []}
         )
+        self.register(
+            "get_clipboard",
+            "Reads the text currently stored in the system clipboard.",
+            get_clipboard,
+            {"type": "object", "properties": {}, "required": []}
+        )
+        self.register(
+            "set_clipboard",
+            "Copies specified text into the system clipboard.",
+            set_clipboard,
+            {
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string", "description": "The text to copy to the clipboard."}
+                },
+                "required": ["text"]
+            }
+        )
+        self.register(
+            "minimize_all_windows",
+            "Minimizes all currently open application windows to display the clean desktop.",
+            minimize_all_windows,
+            {"type": "object", "properties": {}, "required": []}
+        )
+        self.register(
+            "empty_recycle_bin",
+            "Permanently purges and empties the Windows Recycle Bin.",
+            empty_recycle_bin,
+            {"type": "object", "properties": {}, "required": []}
+        )
+        self.register(
+            "get_network_info",
+            "Checks network status, hostname, local IP address, and ping latency.",
+            get_network_info,
+            {"type": "object", "properties": {}, "required": []}
+        )
+        self.register(
+            "run_terminal_command",
+            "Executes a validated command in PowerShell or terminal and returns the console output.",
+            run_terminal_command,
+            {
+                "type": "object",
+                "properties": {
+                    "command": {"type": "string", "description": "PowerShell command or terminal instruction to execute."}
+                },
+                "required": ["command"]
+            }
+        )
 
         # 2. Application & Media Tools
         self.register(
@@ -378,6 +430,88 @@ class ToolRegistry:
                 },
                 "required": ["location"]
             }
+        )
+        self.register(
+            "get_wikipedia_summary",
+            "Fetches an authoritative encyclopedia summary from Wikipedia for any person, technology, place, or concept.",
+            get_wikipedia_summary,
+            {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Subject or title to look up on Wikipedia."}
+                },
+                "required": ["query"]
+            }
+        )
+        self.register(
+            "get_market_price",
+            "Retrieves live financial market prices and quotes for cryptocurrencies (BTC, ETH, SOL) or stocks (AAPL, NVDA, TSLA).",
+            get_market_price,
+            {
+                "type": "object",
+                "properties": {
+                    "symbol": {"type": "string", "description": "Ticker symbol or name (e.g. BTC, ETH, SOL, AAPL, NVDA, TSLA)."}
+                },
+                "required": ["symbol"]
+            }
+        )
+        self.register(
+            "convert_currency",
+            "Converts currency amounts using real-time foreign exchange market rates.",
+            convert_currency,
+            {
+                "type": "object",
+                "properties": {
+                    "amount": {"type": "number", "description": "Amount of money to convert."},
+                    "from_currency": {"type": "string", "description": "Source 3-letter currency code (e.g. USD, EUR, GBP, PHP)."},
+                    "to_currency": {"type": "string", "description": "Target 3-letter currency code (e.g. PHP, USD, JPY, EUR)."}
+                },
+                "required": ["amount", "from_currency", "to_currency"]
+            }
+        )
+        self.register(
+            "calculate",
+            "Calculates mathematical calculations and expressions safely (supports arithmetic, percentages, powers, square roots, trigonometry).",
+            calculate,
+            {
+                "type": "object",
+                "properties": {
+                    "expression": {"type": "string", "description": "Math expression to evaluate (e.g. '125 * 0.15', 'sqrt(144) + 20', '2500 / 12')."}
+                },
+                "required": ["expression"]
+            }
+        )
+        self.register(
+            "play_media_search",
+            "Searches and launches playback for music, songs, artists, or videos on Spotify or YouTube.",
+            play_media_search,
+            {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Song title, artist name, podcast, or video query."},
+                    "platform": {"type": "string", "enum": ["spotify", "youtube"], "description": "Platform to play on (default: spotify)."}
+                },
+                "required": ["query"]
+            }
+        )
+        self.register(
+            "create_note",
+            "Saves a quick note, memo, or idea to the user's local notes archive.",
+            create_note,
+            {
+                "type": "object",
+                "properties": {
+                    "content": {"type": "string", "description": "The note content or text."},
+                    "title": {"type": "string", "description": "Title or summary of the note."}
+                },
+                "required": ["content"]
+            }
+        )
+        self.register(
+            "list_notes",
+            "Lists recent notes and memos saved in JARVIS memory.",
+            list_notes,
+            {"type": "object", "properties": {}}
         )
 
         # 5. Memory Tools

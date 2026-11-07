@@ -143,3 +143,124 @@ def system_power(action: str) -> dict:
             subprocess.run(["rundll32.exe", "powrprof.dll,SetSuspendState", "0,1,0"], check=False)
             return {"success": True, "message": "System suspended."}
     return {"success": False, "message": f"Unsupported power action '{action}'."}
+
+def get_clipboard() -> dict:
+    """Reads and returns the current text stored in the system clipboard."""
+    try:
+        if os.name == "nt":
+            res = subprocess.run(
+                ["powershell.exe", "-NoProfile", "-Command", "Get-Clipboard"],
+                capture_output=True,
+                text=True,
+                timeout=4.0
+            )
+            content = res.stdout.strip()
+            return {"success": True, "clipboard": content, "empty": not bool(content)}
+        return {"success": False, "error": "Clipboard only supported on Windows."}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+def set_clipboard(text: str) -> dict:
+    """Copies the provided text to the system clipboard."""
+    try:
+        if os.name == "nt":
+            p = subprocess.Popen(
+                ["powershell.exe", "-NoProfile", "-Command", "$input | Set-Clipboard"],
+                stdin=subprocess.PIPE,
+                text=True
+            )
+            p.communicate(input=text, timeout=4.0)
+            return {"success": True, "message": "Text copied to clipboard successfully."}
+        return {"success": False, "error": "Clipboard only supported on Windows."}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+def minimize_all_windows() -> dict:
+    """Minimizes all active application windows to show the clean desktop."""
+    try:
+        if os.name == "nt":
+            subprocess.run(
+                ["powershell.exe", "-NoProfile", "-Command", "(New-Object -ComObject Shell.Application).MinimizeAll()"],
+                check=False,
+                timeout=4.0
+            )
+            return {"success": True, "message": "All windows minimized. Desktop visible."}
+        return {"success": False, "error": "Only supported on Windows."}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+def empty_recycle_bin() -> dict:
+    """Permanently purges and empties the Windows Recycle Bin."""
+    try:
+        if os.name == "nt":
+            subprocess.run(
+                ["powershell.exe", "-NoProfile", "-Command", "Clear-RecycleBin -Force -ErrorAction SilentlyContinue"],
+                check=False,
+                timeout=5.0
+            )
+            return {"success": True, "message": "Recycle Bin emptied successfully."}
+        return {"success": False, "error": "Only supported on Windows."}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+def get_network_info() -> dict:
+    """Retrieves network connection status, local IP, gateway, and internet ping latency."""
+    try:
+        import socket
+        hostname = socket.gethostname()
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            s.connect(("8.8.8.8", 80))
+            local_ip = s.getsockname()[0]
+        except Exception:
+            local_ip = "127.0.0.1"
+        finally:
+            s.close()
+
+        # Ping test to cloudflare DNS 1.1.1.1
+        ping_latency = "N/A"
+        try:
+            res = subprocess.run(["ping", "-n", "1", "-w", "1000", "1.1.1.1"], capture_output=True, text=True, timeout=3.0)
+            if "time=" in res.stdout.lower() or "time<" in res.stdout.lower():
+                import re
+                m = re.search(r'time[=<]([0-9]+ms)', res.stdout, re.IGNORECASE)
+                if m:
+                    ping_latency = m.group(1)
+        except Exception:
+            pass
+
+        return {
+            "success": True,
+            "hostname": hostname,
+            "local_ip": local_ip,
+            "latency": ping_latency,
+            "online": ping_latency != "N/A"
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+def run_terminal_command(command: str) -> dict:
+    """Executes a validated command in PowerShell and returns the output text."""
+    # Safety block for destructive disk format or sys drive deletion
+    blocked = ["format ", "del /f /s /q c:", "rmdir /s /q c:", "reg delete hklm"]
+    if any(b in command.lower() for b in blocked):
+        return {"success": False, "error": "Command blocked by JARVIS system security protocol."}
+
+    try:
+        proc = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-Command", command],
+            capture_output=True,
+            text=True,
+            timeout=15.0
+        )
+        out = (proc.stdout or "").strip()
+        err = (proc.stderr or "").strip()
+        return {
+            "success": proc.returncode == 0,
+            "exit_code": proc.returncode,
+            "output": out if out else (f"Error: {err}" if err else "Command executed with no output.")
+        }
+    except subprocess.TimeoutExpired:
+        return {"success": False, "error": "Command execution timed out after 15 seconds."}
+    except Exception as e:
+        return {"success": False, "error": str(e)}

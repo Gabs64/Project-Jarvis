@@ -372,6 +372,76 @@ class JarvisBrain:
                 }
             }
 
+        # Clipboard inspection and copying
+        if "clipboard" in lower:
+            if any(w in lower for w in ["copy to clipboard", "set clipboard", "put on clipboard"]):
+                m = re.search(r"(?:copy|set|put)\s+(?:this\s+|to\s+clipboard\s+|on\s+clipboard\s+)?(.+)", text, re.IGNORECASE)
+                content = m.group(1).replace("to clipboard", "").strip() if m else text
+                return {"tool_call": {"name": "set_clipboard", "arguments": {"text": content}}}
+            return {"tool_call": {"name": "get_clipboard", "arguments": {}}}
+
+        # Desktop & Window Management
+        if any(w in lower for w in ["minimize all", "minimize windows", "show desktop", "clear desktop", "hide windows"]):
+            return {"tool_call": {"name": "minimize_all_windows", "arguments": {}}}
+
+        # Recycle Bin Purge
+        if any(w in lower for w in ["empty recycle bin", "clear recycle bin", "clean recycle bin", "purge recycle bin", "empty trash"]):
+            return {"tool_call": {"name": "empty_recycle_bin", "arguments": {}}}
+
+        # Network Status & Diagnostics
+        if any(w in lower for w in ["network status", "wifi status", "ip address", "ping latency", "internet connection", "network info"]):
+            return {"tool_call": {"name": "get_network_info", "arguments": {}}}
+
+        # Terminal / PowerShell execution
+        if lower.startswith("run command ") or lower.startswith("terminal ") or lower.startswith("exec "):
+            cmd = re.sub(r"^(?:run\s+command|terminal|exec)\s+", "", text, flags=re.IGNORECASE).strip()
+            if cmd:
+                return {"tool_call": {"name": "run_terminal_command", "arguments": {"command": cmd}}}
+
+        # Currency Conversion
+        curr_match = re.search(r"convert\s+([0-9\.]+)\s*([a-zA-Z]{3})\s+(?:to|in)\s+([a-zA-Z]{3})", text, re.IGNORECASE)
+        if curr_match:
+            amt = float(curr_match.group(1))
+            f_c = curr_match.group(2).upper()
+            t_c = curr_match.group(3).upper()
+            return {"tool_call": {"name": "convert_currency", "arguments": {"amount": amt, "from_currency": f_c, "to_currency": t_c}}}
+
+        # Mathematical Calculation
+        calc_match = re.search(r"(?:calculate|what is|compute|solve)\s+([0-9\.\s\+\-\*\/\(\)\%\^x]+)$", text, re.IGNORECASE)
+        if calc_match and any(op in calc_match.group(1) for op in ["+", "-", "*", "/", "%", "^", "x"]):
+            expr = calc_match.group(1).strip()
+            return {"tool_call": {"name": "calculate", "arguments": {"expression": expr}}}
+
+        # Crypto / Stock Market Quotes
+        market_match = re.search(r"(?:price of|market price of|stock price of|how much is)\s+([a-zA-Z0-9]+)", text, re.IGNORECASE)
+        if market_match and any(w in lower for w in ["price", "stock", "crypto", "bitcoin", "btc", "eth", "sol", "aapl", "nvda", "tsla"]):
+            sym = market_match.group(1).strip()
+            if sym.lower() not in ["the", "a", "an", "this", "that"]:
+                return {"tool_call": {"name": "get_market_price", "arguments": {"symbol": sym}}}
+
+        # Media Search (Spotify / YouTube)
+        play_match = re.search(r"play\s+(.+?)(?:\s+on\s+(spotify|youtube))?$", text, re.IGNORECASE)
+        if play_match and not any(w in lower for w in ["game", "with"]):
+            song = play_match.group(1).strip()
+            plat = (play_match.group(2) or "spotify").lower().strip()
+            if song and song.lower() not in ["music", "spotify", "something"]:
+                return {"tool_call": {"name": "play_media_search", "arguments": {"query": song, "platform": plat}}}
+
+        # Notes Management
+        if any(w in lower for w in ["show my notes", "list notes", "read my notes", "what are my notes"]):
+            return {"tool_call": {"name": "list_notes", "arguments": {}}}
+        note_match = re.search(r"(?:take a note|create a note|note down|write down)\s+(.+)", text, re.IGNORECASE)
+        if note_match:
+            note_text = note_match.group(1).strip().rstrip(".!?")
+            return {"tool_call": {"name": "create_note", "arguments": {"content": note_text, "title": "Quick Memo"}}}
+
+        # Wikipedia / Deep Concept Search
+        wiki_match = re.search(r"(?:who is|who was|what is|tell me about|wikipedia)\s+([a-zA-Z0-9_\s]+)", text, re.IGNORECASE)
+        if wiki_match and not any(w in lower for w in ["the weather", "the time", "my name", "your name", "running", "clipboard"]):
+            topic = wiki_match.group(1).strip().rstrip(".!?")
+            if topic and len(topic.split()) <= 6:
+                return {"tool_call": {"name": "get_wikipedia_summary", "arguments": {"query": topic}}}
+
         # Smart home devices: Lights / Camera / Thermostat
         if "light" in lower or "lights" in lower:
             action = "off" if "off" in lower else "on"
@@ -454,6 +524,74 @@ class JarvisBrain:
             if res_data.get("success"):
                 return f"In {loc.capitalize()}, it is currently {cond.lower()} with a temperature of {temp_c} ({temp_f}) and {humidity} humidity, sir."
             return f"I wasn't able to pull live meteorological data for {loc}, sir."
+
+        if tool_name == "get_clipboard":
+            clip = res_data.get("clipboard", "")
+            if clip:
+                preview = clip[:100] + ("..." if len(clip) > 100 else "")
+                return f"Your clipboard currently contains: '{preview}', sir."
+            return "Your system clipboard is currently empty, sir."
+
+        if tool_name == "set_clipboard":
+            return "The requested text has been copied to your clipboard, sir."
+
+        if tool_name == "minimize_all_windows":
+            return "All windows minimized. Your desktop is clear, sir."
+
+        if tool_name == "empty_recycle_bin":
+            return "Recycle Bin has been permanently purged and emptied, sir."
+
+        if tool_name == "get_network_info":
+            ip = res_data.get("local_ip", "127.0.0.1")
+            lat = res_data.get("latency", "N/A")
+            host = res_data.get("hostname", "local")
+            return f"Network telemetry online. Host {host} bound to local IP {ip} with gateway latency of {lat}, sir."
+
+        if tool_name == "run_terminal_command":
+            out = res_data.get("output", "")
+            clean_out = out[:120] + ("..." if len(out) > 120 else "")
+            return f"Command execution completed. Terminal reported: {clean_out}"
+
+        if tool_name == "get_wikipedia_summary":
+            title = res_data.get("title", args.get("query", "the topic"))
+            summary = res_data.get("summary", "")
+            if summary:
+                first_sentence = summary.split(". ")[0] + "."
+                return f"According to Wikipedia regarding {title}: {first_sentence}"
+            return f"I couldn't locate an encyclopedia entry for {title}, sir."
+
+        if tool_name == "get_market_price":
+            sym = res_data.get("symbol", args.get("symbol", "the asset"))
+            price = res_data.get("price", "N/A")
+            change = res_data.get("change", "")
+            chg_str = f" ({change})" if change else ""
+            if res_data.get("success"):
+                return f"{sym} is currently trading at {price}{chg_str}, sir."
+            return f"I wasn't able to pull market quotes for {sym}, sir."
+
+        if tool_name == "convert_currency":
+            fmt = res_data.get("formatted", "")
+            if fmt:
+                return f"At current foreign exchange rates: {fmt}, sir."
+            return "Currency conversion calculation failed, sir."
+
+        if tool_name == "calculate":
+            expr = res_data.get("expression", "")
+            res = res_data.get("result", "")
+            return f"{expr} is equal to {res}, sir."
+
+        if tool_name == "play_media_search":
+            q = args.get("query", "")
+            plat = res_data.get("platform", "media player")
+            return f"Now queuing '{q}' on {plat} for you, sir."
+
+        if tool_name == "create_note":
+            t = args.get("title", "Quick Memo")
+            return f"Note recorded to your archive under '{t}', sir."
+
+        if tool_name == "list_notes":
+            cnt = res_data.get("count", 0)
+            return f"You have {cnt} memos saved in your personal archive, sir."
 
         if tool_name == "create_folder":
             path = args.get("path", "")

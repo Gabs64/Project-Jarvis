@@ -34,14 +34,29 @@ TOOL_RISK_MAP: Dict[str, RiskLevel] = {
     "delete_file": RiskLevel.HIGH,
     "delete_folder": RiskLevel.HIGH,
     
-    # Web & Browser
+    # Desktop, Clipboard & System Tools
+    "get_clipboard": RiskLevel.LOW,
+    "set_clipboard": RiskLevel.LOW,
+    "minimize_all_windows": RiskLevel.LOW,
+    "empty_recycle_bin": RiskLevel.LOW,
+    "get_network_info": RiskLevel.LOW,
+    "run_terminal_command": RiskLevel.MEDIUM,
+    
+    # Web & Knowledge
     "search_web": RiskLevel.LOW,
     "open_url": RiskLevel.LOW,
+    "get_wikipedia_summary": RiskLevel.LOW,
+    "get_market_price": RiskLevel.LOW,
+    "convert_currency": RiskLevel.LOW,
+    "calculate": RiskLevel.LOW,
+    "play_media_search": RiskLevel.LOW,
     
-    # Memory
+    # Memory & Notes
     "store_memory": RiskLevel.LOW,
     "retrieve_memory": RiskLevel.LOW,
     "forget_memory": RiskLevel.MEDIUM,
+    "create_note": RiskLevel.LOW,
+    "list_notes": RiskLevel.LOW,
     
     # Productivity
     "create_reminder": RiskLevel.LOW,
